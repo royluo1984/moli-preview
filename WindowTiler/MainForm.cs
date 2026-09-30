@@ -147,16 +147,24 @@ namespace MoliWindowTiler
         private readonly PreviewPanel preview = new PreviewPanel();
         private readonly Dictionary<string, WindowSnapshot> snapshots = new Dictionary<string, WindowSnapshot>();
         private readonly PositionStore positionStore;
+        private readonly SettingsStore settingsStore;
         private readonly SwitcherOverlay switcher;
         private List<GameWindow> games = new List<GameWindow>();
         private LayoutPlan currentPlan;
         private Size currentClientSize;
         private Rectangle currentArea;
         private bool controlsReady;
+        private bool applyingSettings;
+        private bool updatingMonitors;
+        private bool refreshingWindows;
+        private bool hasSavedSelection;
+        private string preferredMonitor;
+        private readonly HashSet<string> preferredCharacters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         public MainForm()
         {
             positionStore = new PositionStore();
+            settingsStore = new SettingsStore();
             switcher = new SwitcherOverlay(ActivateGame);
             switcher.UserClosed += delegate { if (!IsDisposed && !Disposing) switcherBox.Checked = false; };
             Text = "魔力宝贝窗口排列器";
@@ -165,10 +173,12 @@ namespace MoliWindowTiler
             ClientSize = new Size(1080, 680);
             Icon = SystemIcons.Application;
             BuildControls();
+            ApplySettings(settingsStore.Load());
             controlsReady = true;
             FormClosing += delegate
             {
                 CaptureCurrentPositions();
+                SaveSettings();
                 if (switcher != null && !switcher.IsDisposed) switcher.Close();
             };
             RefreshMonitors();
@@ -200,7 +210,7 @@ namespace MoliWindowTiler
             optionFlow.Controls.Add(new Label { Text = "目标屏幕", AutoSize = true, Margin = new Padding(3, 7, 3, 0) });
             monitorBox.DropDownStyle = ComboBoxStyle.DropDownList;
             monitorBox.Width = 190;
-            monitorBox.SelectedIndexChanged += delegate { UpdatePlan(); };
+            monitorBox.SelectedIndexChanged += delegate { SaveSettings(); UpdatePlan(); };
             optionFlow.Controls.Add(monitorBox);
 
             optionFlow.Controls.Add(new Label { Text = "排列方式", AutoSize = true, Margin = new Padding(10, 7, 3, 0) });
@@ -211,6 +221,7 @@ namespace MoliWindowTiler
             columnsBox.SelectedIndexChanged += delegate
             {
                 customRowsBox.Enabled = columnsBox.SelectedIndex == 5;
+                SaveSettings();
                 UpdatePlan();
             };
             optionFlow.Controls.Add(columnsBox);
@@ -220,7 +231,11 @@ namespace MoliWindowTiler
             customRowsBox.Width = 62;
             customRowsBox.Enabled = false;
             customRowsBox.Margin = new Padding(0, 3, 3, 0);
-            customRowsBox.TextChanged += delegate { if (columnsBox.SelectedIndex == 5) UpdatePlan(); };
+            customRowsBox.TextChanged += delegate
+            {
+                SaveSettings();
+                if (columnsBox.SelectedIndex == 5) UpdatePlan();
+            };
             optionFlow.Controls.Add(customRowsBox);
             optionFlow.Controls.Add(new Label { Text = "例：3,3 / 2,2,2", AutoSize = true, Margin = new Padding(1, 7, 3, 0) });
 
@@ -234,7 +249,7 @@ namespace MoliWindowTiler
                 "左下", "下中", "右下"
             });
             alignmentBox.SelectedIndex = (int)LayoutAlignment.Center;
-            alignmentBox.SelectedIndexChanged += delegate { UpdatePlan(); };
+            alignmentBox.SelectedIndexChanged += delegate { SaveSettings(); UpdatePlan(); };
             optionFlow.Controls.Add(alignmentBox);
 
             optionFlow.Controls.Add(new Label { Text = "窗口间距", AutoSize = true, Margin = new Padding(10, 7, 3, 0) });
@@ -243,7 +258,7 @@ namespace MoliWindowTiler
             gapBox.Value = 0;
             gapBox.Width = 54;
             gapBox.Margin = new Padding(0, 3, 3, 0);
-            gapBox.ValueChanged += delegate { UpdatePlan(); };
+            gapBox.ValueChanged += delegate { SaveSettings(); UpdatePlan(); };
             optionFlow.Controls.Add(gapBox);
             optionFlow.Controls.Add(new Label { Text = "像素（默认 0）", AutoSize = true, Margin = new Padding(1, 7, 3, 0) });
 
@@ -258,7 +273,7 @@ namespace MoliWindowTiler
             switcherBox.Checked = true;
             switcherBox.AutoSize = true;
             switcherBox.Margin = new Padding(12, 5, 3, 0);
-            switcherBox.CheckedChanged += delegate { UpdateSwitcher(); };
+            switcherBox.CheckedChanged += delegate { SaveSettings(); UpdateSwitcher(); };
             optionFlow.Controls.Add(switcherBox);
 
             optionFlow.Controls.Add(new Label { Text = "屏幕边距", AutoSize = true, Margin = new Padding(10, 7, 3, 0) });
@@ -267,7 +282,7 @@ namespace MoliWindowTiler
             marginBox.Value = 8;
             marginBox.Width = 54;
             marginBox.Margin = new Padding(0, 3, 3, 0);
-            marginBox.ValueChanged += delegate { UpdatePlan(); };
+            marginBox.ValueChanged += delegate { SaveSettings(); UpdatePlan(); };
             optionFlow.Controls.Add(marginBox);
             optionFlow.Controls.Add(new Label { Text = "像素", AutoSize = true, Margin = new Padding(1, 7, 3, 0) });
 
@@ -289,6 +304,8 @@ namespace MoliWindowTiler
             windowList.Columns.Add("位置", 120);
             windowList.ItemChecked += delegate
             {
+                if (refreshingWindows) return;
+                if (controlsReady) SaveSettings();
                 UpdatePlan();
             };
             windowsGroup.Controls.Add(windowList);
@@ -341,23 +358,99 @@ namespace MoliWindowTiler
             previewGroup.Controls.Add(planLabel);
         }
 
+        private void ApplySettings(AppSettings settings)
+        {
+            if (settings == null) return;
+            applyingSettings = true;
+            try
+            {
+                columnsBox.SelectedIndex = settings.LayoutMode >= 0 && settings.LayoutMode < columnsBox.Items.Count
+                    ? settings.LayoutMode : 0;
+                customRowsBox.Text = string.IsNullOrWhiteSpace(settings.CustomRows) ? "3,3" : settings.CustomRows;
+                alignmentBox.SelectedIndex = settings.Alignment >= 0 && settings.Alignment < alignmentBox.Items.Count
+                    ? settings.Alignment : (int)LayoutAlignment.Center;
+                gapBox.Value = Math.Max(gapBox.Minimum, Math.Min(gapBox.Maximum, settings.Gap));
+                marginBox.Value = Math.Max(marginBox.Minimum, Math.Min(marginBox.Maximum, settings.Margin));
+                switcherBox.Checked = settings.ShowSwitcher;
+                preferredMonitor = settings.Monitor ?? "";
+                hasSavedSelection = settings.HasSelection;
+                preferredCharacters.Clear();
+                if (settings.SelectedCharacters != null)
+                {
+                    foreach (string character in settings.SelectedCharacters)
+                        if (!string.IsNullOrWhiteSpace(character)) preferredCharacters.Add(character.Trim());
+                }
+                customRowsBox.Enabled = columnsBox.SelectedIndex == 5;
+            }
+            finally
+            {
+                applyingSettings = false;
+            }
+        }
+
+        private string CurrentMonitorName()
+        {
+            MonitorOption option = monitorBox.SelectedItem as MonitorOption;
+            if (option == null) return null;
+            return option.Screen == null ? "" : option.Screen.DeviceName;
+        }
+
+        private void SaveSettings()
+        {
+            if (!controlsReady || applyingSettings || updatingMonitors) return;
+            string monitor = CurrentMonitorName();
+            if (monitor != null) preferredMonitor = monitor;
+            if (windowList.Items.Count > 0)
+            {
+                preferredCharacters.Clear();
+                foreach (ListViewItem item in windowList.Items)
+                {
+                    GameWindow game = item.Tag as GameWindow;
+                    if (item.Checked && game != null && !string.IsNullOrWhiteSpace(game.CharacterName))
+                        preferredCharacters.Add(game.CharacterName.Trim());
+                }
+                hasSavedSelection = true;
+            }
+            settingsStore.Save(new AppSettings
+            {
+                LayoutMode = columnsBox.SelectedIndex < 0 ? 0 : columnsBox.SelectedIndex,
+                CustomRows = customRowsBox.Text,
+                Alignment = alignmentBox.SelectedIndex < 0 ? (int)LayoutAlignment.Center : alignmentBox.SelectedIndex,
+                Gap = (int)gapBox.Value,
+                Margin = (int)marginBox.Value,
+                Monitor = preferredMonitor ?? "",
+                ShowSwitcher = switcherBox.Checked,
+                HasSelection = hasSavedSelection,
+                SelectedCharacters = preferredCharacters.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList()
+            });
+        }
+
         private void RefreshMonitors()
         {
-            string selected = monitorBox.SelectedItem is MonitorOption
-                ? ((MonitorOption)monitorBox.SelectedItem).Screen == null ? "AUTO" : ((MonitorOption)monitorBox.SelectedItem).Screen.DeviceName
-                : "AUTO";
-            monitorBox.BeginUpdate();
-            monitorBox.Items.Clear();
-            monitorBox.Items.Add(new MonitorOption("当前客户端所在屏幕", null));
-            foreach (Screen screen in Screen.AllScreens.OrderBy(s => s.DeviceName))
-                monitorBox.Items.Add(new MonitorOption(screen.DeviceName + "  " + screen.WorkingArea.Width + "×" + screen.WorkingArea.Height, screen));
-            monitorBox.SelectedIndex = 0;
-            for (int i = 1; i < monitorBox.Items.Count; i++)
+            string selected = CurrentMonitorName();
+            if (selected == null) selected = preferredMonitor ?? "";
+            updatingMonitors = true;
+            try
             {
-                MonitorOption option = (MonitorOption)monitorBox.Items[i];
-                if (option.Screen.DeviceName == selected) monitorBox.SelectedIndex = i;
+                monitorBox.BeginUpdate();
+                monitorBox.Items.Clear();
+                monitorBox.Items.Add(new MonitorOption("当前客户端所在屏幕", null));
+                foreach (Screen screen in Screen.AllScreens.OrderBy(s => s.DeviceName))
+                    monitorBox.Items.Add(new MonitorOption(screen.DeviceName + "  " + screen.WorkingArea.Width + "×" + screen.WorkingArea.Height, screen));
+                monitorBox.SelectedIndex = 0;
+                for (int i = 1; i < monitorBox.Items.Count; i++)
+                {
+                    MonitorOption option = (MonitorOption)monitorBox.Items[i];
+                    if (option.Screen.DeviceName == selected) monitorBox.SelectedIndex = i;
+                }
+                monitorBox.EndUpdate();
             }
-            monitorBox.EndUpdate();
+            finally
+            {
+                updatingMonitors = false;
+            }
+            string current = CurrentMonitorName();
+            preferredMonitor = current ?? "";
         }
 
         private void RefreshWindows()
@@ -369,6 +462,7 @@ namespace MoliWindowTiler
                 GameWindow game = item.Tag as GameWindow;
                 if (game != null) checkedState[game.Key] = item.Checked;
             }
+            refreshingWindows = true;
             try
             {
                 games = Native.FindGames();
@@ -385,7 +479,12 @@ namespace MoliWindowTiler
                     item.SubItems.Add(game.Minimized ? "最小化" : game.Maximized ? "最大化" : "正常");
                     item.SubItems.Add(game.Bounds.Left + "," + game.Bounds.Top + "  " + game.Bounds.Width + "×" + game.Bounds.Height);
                     item.Tag = game;
-                    item.Checked = !checkedState.ContainsKey(game.Key) || checkedState[game.Key];
+                    if (checkedState.ContainsKey(game.Key))
+                        item.Checked = checkedState[game.Key];
+                    else if (hasSavedSelection)
+                        item.Checked = preferredCharacters.Contains(game.CharacterName);
+                    else
+                        item.Checked = true;
                     windowList.Items.Add(item);
                 }
                 windowList.EndUpdate();
@@ -397,6 +496,10 @@ namespace MoliWindowTiler
             catch (Exception ex)
             {
                 statusLabel.Text = "读取窗口失败：" + ex.Message;
+            }
+            finally
+            {
+                refreshingWindows = false;
             }
             UpdateSwitcher();
             UpdatePlan();
@@ -522,7 +625,9 @@ namespace MoliWindowTiler
                 case 5:
                     return ParseRows(customRowsBox.Text, count);
                 default:
-                    return null; // Let the engine compare all row partitions.
+                    // Six clients are easiest to scan as two balanced rows. Keep this
+                    // deterministic instead of letting the shape scorer choose 2 + 4.
+                    return count == 6 ? new[] { 3, 3 } : null;
             }
         }
 

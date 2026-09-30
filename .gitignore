@@ -1,5 +1,6 @@
 # Runtime data (kept local per machine/account)
 character-positions.json
+moli-settings.json
 WindowTiler-error.log
 
 # Build output

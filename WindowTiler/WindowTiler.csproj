@@ -30,6 +30,7 @@
     <Compile Include="MainForm.cs" />
     <Compile Include="Native.cs" />
     <Compile Include="PositionStore.cs" />
+    <Compile Include="SettingsStore.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="SwitcherOverlay.cs" />
   </ItemGroup>

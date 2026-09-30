@@ -144,6 +144,7 @@ namespace MoliWindowTiler
         private readonly Button clearButton = new Button();
         private readonly Button arrangeButton = new Button();
         private readonly Button restoreButton = new Button();
+        private readonly Button closeAllButton = new Button();
         private readonly PreviewPanel preview = new PreviewPanel();
         private readonly Dictionary<string, WindowSnapshot> snapshots = new Dictionary<string, WindowSnapshot>();
         private readonly PositionStore positionStore;
@@ -342,6 +343,12 @@ namespace MoliWindowTiler
             restoreButton.Width = 92;
             restoreButton.Click += delegate { RestoreWindows(); };
             actions.Controls.Add(restoreButton);
+            closeAllButton.Text = "关闭所有客户端";
+            closeAllButton.Width = 120;
+            closeAllButton.ForeColor = Color.DarkRed;
+            closeAllButton.Enabled = false;
+            closeAllButton.Click += delegate { CloseAllClients(); };
+            actions.Controls.Add(closeAllButton);
 
             statusLabel.Dock = DockStyle.Fill;
             statusLabel.AutoEllipsis = true;
@@ -472,6 +479,7 @@ namespace MoliWindowTiler
             try
             {
                 games = Native.FindGames();
+                closeAllButton.Enabled = games.Count > 0;
                 ApplySavedPositions(games);
                 windowList.BeginUpdate();
                 windowList.Items.Clear();
@@ -501,6 +509,7 @@ namespace MoliWindowTiler
             }
             catch (Exception ex)
             {
+                closeAllButton.Enabled = false;
                 statusLabel.Text = "读取窗口失败：" + ex.Message;
             }
             finally
@@ -798,6 +807,61 @@ namespace MoliWindowTiler
                 planLabel.Text = "布局计算失败：" + ex.Message;
                 arrangeButton.Enabled = false;
             }
+        }
+
+        private void CloseAllClients()
+        {
+            List<GameWindow> found;
+            try
+            {
+                found = Native.FindGames();
+            }
+            catch (Exception ex)
+            {
+                statusLabel.Text = "读取客户端失败：" + ex.Message;
+                return;
+            }
+            if (found.Count == 0)
+            {
+                RefreshWindows();
+                statusLabel.Text = "当前没有可关闭的游戏客户端。";
+                return;
+            }
+
+            DialogResult result = MessageBox.Show(this,
+                "确定要关闭当前发现的 " + found.Count + " 个游戏客户端吗？",
+                "关闭所有客户端", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button2);
+            if (result != DialogResult.Yes) return;
+
+            games = found;
+            CaptureCurrentPositions();
+            int requested = 0;
+            foreach (GameWindow game in found)
+            {
+                if (game != null && Native.IsWindow(game.Handle) &&
+                    Native.PostMessage(game.Handle, 0x0010, IntPtr.Zero, IntPtr.Zero))
+                    requested++;
+            }
+            closeAllButton.Enabled = false;
+            statusLabel.Text = "已向 " + requested + " 个客户端发送关闭请求。";
+            Timer closeTimer = new Timer { Interval = 300 };
+            int checks = 0;
+            closeTimer.Tick += delegate
+            {
+                checks++;
+                bool anyRemaining = found.Any(game => game != null && Native.IsWindow(game.Handle));
+                if (!anyRemaining || checks >= 10)
+                {
+                    closeTimer.Stop();
+                    closeTimer.Dispose();
+                    RefreshWindows();
+                    statusLabel.Text = anyRemaining
+                        ? "已发送关闭请求，仍有客户端正在退出。"
+                        : "已关闭全部游戏客户端。";
+                }
+            };
+            closeTimer.Start();
         }
 
         private void ArrangeWindows()

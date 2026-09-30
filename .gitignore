@@ -1,0 +1,14 @@
+# Runtime data (kept local per machine/account)
+character-positions.json
+WindowTiler-error.log
+
+# Build output
+WindowTiler/bin/
+WindowTiler/obj/
+
+# Visual Studio / user files
+*.user
+*.suo
+*.userosscache
+*.pdb
+*.log

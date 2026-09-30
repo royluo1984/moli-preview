@@ -305,7 +305,6 @@ namespace MoliWindowTiler
             windowList.ItemChecked += delegate
             {
                 if (refreshingWindows) return;
-                if (controlsReady) SaveSettings();
                 UpdatePlan();
             };
             windowsGroup.Controls.Add(windowList);
@@ -398,31 +397,38 @@ namespace MoliWindowTiler
         private void SaveSettings()
         {
             if (!controlsReady || applyingSettings || updatingMonitors) return;
-            string monitor = CurrentMonitorName();
-            if (monitor != null) preferredMonitor = monitor;
-            if (windowList.Items.Count > 0)
+            try
             {
-                preferredCharacters.Clear();
-                foreach (ListViewItem item in windowList.Items)
+                string monitor = CurrentMonitorName();
+                if (monitor != null) preferredMonitor = monitor;
+                if (windowList.Items.Count > 0)
                 {
-                    GameWindow game = item.Tag as GameWindow;
-                    if (item.Checked && game != null && !string.IsNullOrWhiteSpace(game.CharacterName))
-                        preferredCharacters.Add(game.CharacterName.Trim());
+                    preferredCharacters.Clear();
+                    foreach (ListViewItem item in windowList.Items)
+                    {
+                        GameWindow game = item.Tag as GameWindow;
+                        if (item.Checked && game != null && !string.IsNullOrWhiteSpace(game.CharacterName))
+                            preferredCharacters.Add(game.CharacterName.Trim());
+                    }
+                    hasSavedSelection = true;
                 }
-                hasSavedSelection = true;
+                settingsStore.Save(new AppSettings
+                {
+                    LayoutMode = columnsBox.SelectedIndex < 0 ? 0 : columnsBox.SelectedIndex,
+                    CustomRows = customRowsBox.Text,
+                    Alignment = alignmentBox.SelectedIndex < 0 ? (int)LayoutAlignment.Center : alignmentBox.SelectedIndex,
+                    Gap = (int)gapBox.Value,
+                    Margin = (int)marginBox.Value,
+                    Monitor = preferredMonitor ?? "",
+                    ShowSwitcher = switcherBox.Checked,
+                    HasSelection = hasSavedSelection,
+                    SelectedCharacters = preferredCharacters.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList()
+                });
             }
-            settingsStore.Save(new AppSettings
+            catch
             {
-                LayoutMode = columnsBox.SelectedIndex < 0 ? 0 : columnsBox.SelectedIndex,
-                CustomRows = customRowsBox.Text,
-                Alignment = alignmentBox.SelectedIndex < 0 ? (int)LayoutAlignment.Center : alignmentBox.SelectedIndex,
-                Gap = (int)gapBox.Value,
-                Margin = (int)marginBox.Value,
-                Monitor = preferredMonitor ?? "",
-                ShowSwitcher = switcherBox.Checked,
-                HasSelection = hasSavedSelection,
-                SelectedCharacters = preferredCharacters.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList()
-            });
+                // Settings persistence must never interrupt the window manager UI.
+            }
         }
 
         private void RefreshMonitors()

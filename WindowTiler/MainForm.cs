@@ -82,7 +82,7 @@ namespace MoliWindowTiler
                 scale = Math.Max(0.03f, scale);
                 float left = (ClientSize.Width - area.Width * scale) / 2f;
                 float top = 26 + (ClientSize.Height - 26 - area.Height * scale) / 2f;
-                g.DrawString("工作区 " + area.Width + "×" + area.Height + "　目标 " + clientSize.Width + "×" + clientSize.Height,
+                g.DrawString("工作区 " + area.Width + "×" + area.Height + "　当前客户端 " + clientSize.Width + "×" + clientSize.Height,
                     titleFont, textBrush, 10, 7);
                 using (Pen areaPen = new Pen(Color.FromArgb(160, 170, 184)))
                 using (Brush areaBrush = new SolidBrush(Color.White))
@@ -134,7 +134,6 @@ namespace MoliWindowTiler
         private readonly ComboBox columnsBox = new ComboBox();
         private readonly ComboBox alignmentBox = new ComboBox();
         private readonly TextBox customRowsBox = new TextBox();
-        private readonly CheckBox resizeBox = new CheckBox();
         private readonly CheckBox switcherBox = new CheckBox();
         private readonly CheckBox magnetBox = new CheckBox();
         private readonly NumericUpDown marginBox = new NumericUpDown();
@@ -158,11 +157,6 @@ namespace MoliWindowTiler
         private Rectangle currentArea;
         private bool controlsReady;
         private bool magnetApplying;
-
-        private static readonly Size[] SupportedClientSizes =
-        {
-            new Size(800, 600), new Size(640, 480)
-        };
 
         public MainForm()
         {
@@ -262,12 +256,12 @@ namespace MoliWindowTiler
             optionFlow.Controls.Add(gapBox);
             optionFlow.Controls.Add(new Label { Text = "像素（默认 0）", AutoSize = true, Margin = new Padding(1, 7, 3, 0) });
 
-            resizeBox.Text = "自动选择 800×600 / 640×480";
-            resizeBox.Checked = true;
-            resizeBox.AutoSize = true;
-            resizeBox.Margin = new Padding(12, 5, 3, 0);
-            resizeBox.CheckedChanged += delegate { UpdatePlan(); };
-            optionFlow.Controls.Add(resizeBox);
+            optionFlow.Controls.Add(new Label
+            {
+                Text = "排列时保持客户端当前分辨率",
+                AutoSize = true,
+                Margin = new Padding(12, 7, 3, 0)
+            });
 
             switcherBox.Text = "显示点击切换浮层";
             switcherBox.Checked = true;
@@ -497,7 +491,7 @@ namespace MoliWindowTiler
                     Native.SetWindowPos(handle, IntPtr.Zero,
                         oldBounds.Left + delta.X, oldBounds.Top + delta.Y,
                         oldBounds.Width, oldBounds.Height,
-                        0x0004 | 0x0010 | 0x0200);
+                        0x0001 | 0x0004 | 0x0010 | 0x0200);
                 }
             }
             finally
@@ -544,10 +538,19 @@ namespace MoliWindowTiler
                         !string.IsNullOrWhiteSpace(saved.Screen) &&
                         string.Equals(s.DeviceName, saved.Screen, StringComparison.OrdinalIgnoreCase));
                     if (targetScreen == null) targetScreen = Screen.FromHandle(game.Handle) ?? Screen.PrimaryScreen;
-                    Rectangle target = ClampToWorkArea(saved.Bounds, targetScreen.WorkingArea);
+                    // Position records from older versions also contain a size. Keep the
+                    // live outer size here so restoring a record never changes the game
+                    // client's rendering resolution or stretches its frame.
+                    Rectangle liveBounds = Native.WindowBounds(game.Handle);
+                    Size liveSize = liveBounds.Width > 0 && liveBounds.Height > 0
+                        ? liveBounds.Size
+                        : game.Bounds.Size;
+                    Rectangle savedPosition = new Rectangle(saved.Bounds.Left, saved.Bounds.Top,
+                        Math.Max(1, liveSize.Width), Math.Max(1, liveSize.Height));
+                    Rectangle target = ClampToWorkArea(savedPosition, targetScreen.WorkingArea);
                     if (Native.SetWindowPos(game.Handle, IntPtr.Zero, target.Left, target.Top,
-                        target.Width, target.Height, 0x0004 | 0x0010 | 0x0040 | 0x0200))
-                        game.Bounds = target;
+                        target.Width, target.Height, 0x0001 | 0x0004 | 0x0010 | 0x0040 | 0x0200))
+                        game.Bounds = new Rectangle(target.Left, target.Top, liveSize.Width, liveSize.Height);
                 }
                 catch { }
             }
@@ -654,15 +657,6 @@ namespace MoliWindowTiler
             return rows.ToArray();
         }
 
-        private Size OuterSize(GameWindow game, Size client)
-        {
-            int frameWidth = Math.Max(0, game.Bounds.Width - game.ClientSize.Width);
-            int frameHeight = Math.Max(0, game.Bounds.Height - game.ClientSize.Height);
-            if (frameWidth == 0) frameWidth = 6;
-            if (frameHeight == 0) frameHeight = 29;
-            return new Size(client.Width + frameWidth, client.Height + frameHeight);
-        }
-
         private LayoutAlignment SelectedAlignment()
         {
             return alignmentBox.SelectedIndex < 0
@@ -696,35 +690,14 @@ namespace MoliWindowTiler
             int[] requestedRows = RequestedRows(selected.Count);
             LayoutAlignment alignment = SelectedAlignment();
             int gap = SelectedGap();
-            if (!resizeBox.Checked)
-            {
-                LayoutPlan keep = requestedRows == null
-                    ? global::MoliWindowTiler.LayoutEngine.Calculate(area, selected.Select(g => g.Bounds.Size).ToList(), 0, alignment, gap)
-                    : global::MoliWindowTiler.LayoutEngine.Calculate(area, selected.Select(g => g.Bounds.Size).ToList(), requestedRows, alignment, gap);
-                return new LayoutChoice { Plan = keep, ClientSize = selected[0].ClientSize, Fits = keep.ClippedArea == 0 && keep.HiddenRatio < 0.00001 };
-            }
-
-            LayoutChoice best = null;
-            foreach (Size client in SupportedClientSizes)
-            {
-                List<Size> outer = selected.Select(g => OuterSize(g, client)).ToList();
-                LayoutPlan plan = requestedRows == null
-                    ? global::MoliWindowTiler.LayoutEngine.Calculate(area, outer, 0, alignment, gap)
-                    : global::MoliWindowTiler.LayoutEngine.Calculate(area, outer, requestedRows, alignment, gap);
-                LayoutChoice current = new LayoutChoice { Plan = plan, ClientSize = client,
-                    Fits = plan.ClippedArea == 0 && plan.HiddenRatio < 0.00001 };
-                if (best == null || BetterChoice(current, best)) best = current;
-            }
-            return best;
-        }
-
-        private static bool BetterChoice(LayoutChoice a, LayoutChoice b)
-        {
-            if (a.Fits != b.Fits) return a.Fits;
-            if (a.Fits && b.Fits) return a.ClientSize.Width * a.ClientSize.Height > b.ClientSize.Width * b.ClientSize.Height;
-            if (a.Plan.ClippedArea != b.Plan.ClippedArea) return a.Plan.ClippedArea < b.Plan.ClippedArea;
-            if (Math.Abs(a.Plan.HiddenRatio - b.Plan.HiddenRatio) > 0.00001) return a.Plan.HiddenRatio < b.Plan.HiddenRatio;
-            return a.ClientSize.Width * a.ClientSize.Height > b.ClientSize.Width * b.ClientSize.Height;
+            // The game owns the client-area resolution. Calculate with each live outer
+            // rectangle and let ArrangeWindows move the frames without resizing them.
+            List<Size> outer = selected.Select(g => g.Bounds.Size).ToList();
+            LayoutPlan keep = requestedRows == null
+                ? global::MoliWindowTiler.LayoutEngine.Calculate(area, outer, 0, alignment, gap)
+                : global::MoliWindowTiler.LayoutEngine.Calculate(area, outer, requestedRows, alignment, gap);
+            return new LayoutChoice { Plan = keep, ClientSize = selected[0].ClientSize,
+                Fits = keep.ClippedArea == 0 && keep.HiddenRatio < 0.00001 };
         }
 
         private void UpdateSwitcher()
@@ -802,7 +775,7 @@ namespace MoliWindowTiler
                 preview.SetPlan(choice.Plan, selected, area, choice.ClientSize);
                 string result = "已选 " + selected.Count + " 个，" + choice.Plan.Description
                     + "，对齐 " + AlignmentText(choice.Plan.Alignment)
-                    + "，间距 " + choice.Plan.Gap + "，目标 "
+                    + "，间距 " + choice.Plan.Gap + "，当前客户端 "
                     + choice.ClientSize.Width + "×" + choice.ClientSize.Height;
                 if (choice.Plan.ClippedArea > 0 || choice.Plan.HiddenRatio > 0.00001)
                     result += "；当前屏幕不足，预计重叠/超出 " + (choice.Plan.HiddenRatio * 100).ToString("0.#") + "%";
@@ -833,8 +806,7 @@ namespace MoliWindowTiler
                 if (game.Minimized || game.Maximized) Native.ShowWindowAsync(game.Handle, 9);
             }
 
-            // Try the selected game resolution. Some clients enforce their own fixed size;
-            // the second pass below reads back the actual outer rectangles before positioning.
+            // Move the frames only. The client owns its resolution and outer size.
             for (int i = 0; i < selected.Count && i < currentPlan.Windows.Length; i++)
             {
                 GameWindow game = selected[i];
@@ -844,26 +816,25 @@ namespace MoliWindowTiler
                 {
                     Rectangle target = currentPlan.Windows[i];
                     const uint SWP_NOZORDER = 0x0004;
+                    const uint SWP_NOSIZE = 0x0001;
                     const uint SWP_NOACTIVATE = 0x0010;
                     const uint SWP_SHOWWINDOW = 0x0040;
                     const uint SWP_NOOWNERZORDER = 0x0200;
                     if (!Native.SetWindowPos(game.Handle, IntPtr.Zero, target.Left, target.Top,
-                        target.Width, target.Height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER))
+                        target.Width, target.Height, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER))
                         errors.Add("PID " + game.Pid);
                     else moved++;
                 }
                 catch (Exception ex) { errors.Add("PID " + game.Pid + "（" + ex.Message + "）"); }
             }
 
-            // Re-read sizes after SetWindowPos. Reincarnation may keep 800×600 even when
-            // a smaller request was made; layout with the real sizes so every frame stays
-            // inside the work area, while clients are allowed to overlap each other.
+            // Re-read the live outer sizes so every frame stays inside the work area,
+            // while clients are allowed to overlap each other.
             List<Size> actualSizes = selected.Select(g => Native.WindowBounds(g.Handle).Size).ToList();
             if (actualSizes.Any(s => s.Width <= 0 || s.Height <= 0))
                 actualSizes = selected.Select(g => g.Bounds.Size).ToList();
-            // Keep the row grouping shown in the preview. Re-running the smart
-            // search here could turn a visible 3+3 preview into 2+4 after the
-            // client reports its enforced outer size.
+            // Keep the row grouping shown in the preview so a visible 3+3 layout
+            // remains 3+3 after the client reports its live outer size.
             LayoutPlan finalPlan = global::MoliWindowTiler.LayoutEngine.Calculate(
                 currentArea, actualSizes, currentPlan.RowCounts,
                 currentPlan.Alignment, currentPlan.Gap);
@@ -871,7 +842,7 @@ namespace MoliWindowTiler
             {
                 Rectangle target = finalPlan.Windows[i];
                 if (!Native.SetWindowPos(selected[i].Handle, IntPtr.Zero, target.Left, target.Top,
-                    target.Width, target.Height, 0x0004 | 0x0010 | 0x0040 | 0x0200))
+                    target.Width, target.Height, 0x0001 | 0x0004 | 0x0010 | 0x0040 | 0x0200))
                     errors.Add("PID " + selected[i].Pid);
             }
             string arrangeStatus = "已排列 " + moved + " 个客户端" + (errors.Count == 0 ? "。" : "；失败：" + string.Join("、", errors));

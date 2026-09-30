@@ -135,11 +135,8 @@ namespace MoliWindowTiler
         private readonly ComboBox alignmentBox = new ComboBox();
         private readonly TextBox customRowsBox = new TextBox();
         private readonly CheckBox switcherBox = new CheckBox();
-        private readonly CheckBox magnetBox = new CheckBox();
         private readonly NumericUpDown marginBox = new NumericUpDown();
         private readonly NumericUpDown gapBox = new NumericUpDown();
-        private readonly Timer magnetTimer = new Timer();
-        private readonly Dictionary<IntPtr, Rectangle> magnetBounds = new Dictionary<IntPtr, Rectangle>();
         private readonly Label statusLabel = new Label();
         private readonly Label planLabel = new Label();
         private readonly Button refreshButton = new Button();
@@ -156,15 +153,12 @@ namespace MoliWindowTiler
         private Size currentClientSize;
         private Rectangle currentArea;
         private bool controlsReady;
-        private bool magnetApplying;
 
         public MainForm()
         {
             positionStore = new PositionStore();
             switcher = new SwitcherOverlay(ActivateGame);
             switcher.UserClosed += delegate { if (!IsDisposed && !Disposing) switcherBox.Checked = false; };
-            magnetTimer.Interval = 30;
-            magnetTimer.Tick += delegate { MonitorMagnetGroup(); };
             Text = "魔力宝贝窗口排列器";
             StartPosition = FormStartPosition.CenterScreen;
             MinimumSize = new Size(860, 560);
@@ -175,9 +169,6 @@ namespace MoliWindowTiler
             FormClosing += delegate
             {
                 CaptureCurrentPositions();
-                magnetTimer.Stop();
-                magnetTimer.Dispose();
-                magnetBounds.Clear();
                 if (switcher != null && !switcher.IsDisposed) switcher.Close();
             };
             RefreshMonitors();
@@ -270,27 +261,6 @@ namespace MoliWindowTiler
             switcherBox.CheckedChanged += delegate { UpdateSwitcher(); };
             optionFlow.Controls.Add(switcherBox);
 
-            magnetBox.Text = "磁力联动（拖动一个带动全部）";
-            magnetBox.Checked = false;
-            magnetBox.AutoSize = true;
-            magnetBox.Margin = new Padding(12, 5, 3, 0);
-            magnetBox.CheckedChanged += delegate
-            {
-                if (magnetBox.Checked)
-                {
-                    ArmMagnetGroup(SelectedGames());
-                    statusLabel.Text = magnetBounds.Count >= 2
-                        ? "磁力联动已启用，拖动任意一个已选客户端会带动其它客户端。"
-                        : "磁力联动已启用，请先排列或选择至少两个客户端。";
-                }
-                else
-                {
-                    DisarmMagnetGroup();
-                    statusLabel.Text = "磁力联动已关闭，客户端可以独立移动。";
-                }
-            };
-            optionFlow.Controls.Add(magnetBox);
-
             optionFlow.Controls.Add(new Label { Text = "屏幕边距", AutoSize = true, Margin = new Padding(10, 7, 3, 0) });
             marginBox.Minimum = 0;
             marginBox.Maximum = 80;
@@ -320,7 +290,6 @@ namespace MoliWindowTiler
             windowList.ItemChecked += delegate
             {
                 UpdatePlan();
-                if (controlsReady && magnetBox.Checked) ArmMagnetGroup(SelectedGames());
             };
             windowsGroup.Controls.Add(windowList);
 
@@ -431,78 +400,6 @@ namespace MoliWindowTiler
             }
             UpdateSwitcher();
             UpdatePlan();
-            if (magnetBox.Checked) ArmMagnetGroup(SelectedGames());
-        }
-
-        private void ArmMagnetGroup(IList<GameWindow> selected)
-        {
-            magnetBounds.Clear();
-            if (selected == null) return;
-            foreach (GameWindow game in selected)
-            {
-                if (game == null || !Native.IsWindow(game.Handle)) continue;
-                Rectangle bounds = Native.WindowBounds(game.Handle);
-                if (bounds.Width > 0 && bounds.Height > 0) magnetBounds[game.Handle] = bounds;
-            }
-            if (magnetBounds.Count >= 2) magnetTimer.Start();
-            else magnetTimer.Stop();
-        }
-
-        private void DisarmMagnetGroup()
-        {
-            magnetTimer.Stop();
-            magnetBounds.Clear();
-        }
-
-        private void MonitorMagnetGroup()
-        {
-            if (magnetApplying || !magnetBox.Checked || magnetBounds.Count < 2) return;
-            IntPtr movedHandle = IntPtr.Zero;
-            Point delta = Point.Empty;
-            List<IntPtr> invalid = new List<IntPtr>();
-            foreach (KeyValuePair<IntPtr, Rectangle> entry in magnetBounds.ToList())
-            {
-                if (!Native.IsWindow(entry.Key))
-                {
-                    invalid.Add(entry.Key);
-                    continue;
-                }
-                Rectangle current = Native.WindowBounds(entry.Key);
-                if (current.Width <= 0 || current.Height <= 0) continue;
-                int dx = current.Left - entry.Value.Left;
-                int dy = current.Top - entry.Value.Top;
-                if (dx != 0 || dy != 0)
-                {
-                    movedHandle = entry.Key;
-                    delta = new Point(dx, dy);
-                    break;
-                }
-            }
-            foreach (IntPtr handle in invalid) magnetBounds.Remove(handle);
-            if (movedHandle == IntPtr.Zero || (delta.X == 0 && delta.Y == 0)) return;
-
-            magnetApplying = true;
-            try
-            {
-                foreach (IntPtr handle in magnetBounds.Keys.ToList())
-                {
-                    if (handle == movedHandle || !Native.IsWindow(handle)) continue;
-                    Rectangle oldBounds = magnetBounds[handle];
-                    Native.SetWindowPos(handle, IntPtr.Zero,
-                        oldBounds.Left + delta.X, oldBounds.Top + delta.Y,
-                        oldBounds.Width, oldBounds.Height,
-                        0x0001 | 0x0004 | 0x0010 | 0x0200);
-                }
-            }
-            finally
-            {
-                magnetApplying = false;
-                foreach (IntPtr handle in magnetBounds.Keys.ToList())
-                {
-                    Rectangle current = Native.WindowBounds(handle);
-                    if (current.Width > 0 && current.Height > 0) magnetBounds[handle] = current;
-                }
-            }
         }
 
         private void CaptureCurrentPositions()
@@ -848,7 +745,6 @@ namespace MoliWindowTiler
             string arrangeStatus = "已排列 " + moved + " 个客户端" + (errors.Count == 0 ? "。" : "；失败：" + string.Join("、", errors));
             CaptureCurrentPositions();
             RefreshWindows();
-            if (magnetBox.Checked) ArmMagnetGroup(SelectedGames());
             statusLabel.Text = arrangeStatus;
         }
 
@@ -872,7 +768,6 @@ namespace MoliWindowTiler
             string restoreStatus = restored == 0 ? "没有可恢复的窗口。" : "已恢复 " + restored + " 个客户端的原位置。";
             foreach (string key in restoredKeys) snapshots.Remove(key);
             RefreshWindows();
-            if (magnetBox.Checked) ArmMagnetGroup(SelectedGames());
             statusLabel.Text = restoreStatus;
         }
     }

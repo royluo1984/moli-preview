@@ -132,10 +132,12 @@ namespace MoliWindowTiler
         private readonly ListView windowList = new ListView();
         private readonly ComboBox monitorBox = new ComboBox();
         private readonly ComboBox columnsBox = new ComboBox();
+        private readonly ComboBox alignmentBox = new ComboBox();
         private readonly TextBox customRowsBox = new TextBox();
         private readonly CheckBox resizeBox = new CheckBox();
         private readonly CheckBox switcherBox = new CheckBox();
         private readonly NumericUpDown marginBox = new NumericUpDown();
+        private readonly NumericUpDown gapBox = new NumericUpDown();
         private readonly Label statusLabel = new Label();
         private readonly Label planLabel = new Label();
         private readonly Button refreshButton = new Button();
@@ -187,7 +189,7 @@ namespace MoliWindowTiler
             root.RowCount = 3;
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 54));
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 46));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 126));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 154));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
             Controls.Add(root);
@@ -228,6 +230,29 @@ namespace MoliWindowTiler
             optionFlow.Controls.Add(customRowsBox);
             optionFlow.Controls.Add(new Label { Text = "例：3,3 / 2,2,2", AutoSize = true, Margin = new Padding(1, 7, 3, 0) });
 
+            optionFlow.Controls.Add(new Label { Text = "对齐方式", AutoSize = true, Margin = new Padding(10, 7, 3, 0) });
+            alignmentBox.DropDownStyle = ComboBoxStyle.DropDownList;
+            alignmentBox.Width = 92;
+            alignmentBox.Items.AddRange(new object[]
+            {
+                "左上", "上中", "右上",
+                "左中", "居中", "右中",
+                "左下", "下中", "右下"
+            });
+            alignmentBox.SelectedIndex = (int)LayoutAlignment.Center;
+            alignmentBox.SelectedIndexChanged += delegate { UpdatePlan(); };
+            optionFlow.Controls.Add(alignmentBox);
+
+            optionFlow.Controls.Add(new Label { Text = "窗口间距", AutoSize = true, Margin = new Padding(10, 7, 3, 0) });
+            gapBox.Minimum = 0;
+            gapBox.Maximum = 300;
+            gapBox.Value = 0;
+            gapBox.Width = 54;
+            gapBox.Margin = new Padding(0, 3, 3, 0);
+            gapBox.ValueChanged += delegate { UpdatePlan(); };
+            optionFlow.Controls.Add(gapBox);
+            optionFlow.Controls.Add(new Label { Text = "像素（默认 0）", AutoSize = true, Margin = new Padding(1, 7, 3, 0) });
+
             resizeBox.Text = "自动选择 800×600 / 640×480";
             resizeBox.Checked = true;
             resizeBox.AutoSize = true;
@@ -242,7 +267,7 @@ namespace MoliWindowTiler
             switcherBox.CheckedChanged += delegate { UpdateSwitcher(); };
             optionFlow.Controls.Add(switcherBox);
 
-            optionFlow.Controls.Add(new Label { Text = "边距", AutoSize = true, Margin = new Padding(10, 7, 3, 0) });
+            optionFlow.Controls.Add(new Label { Text = "屏幕边距", AutoSize = true, Margin = new Padding(10, 7, 3, 0) });
             marginBox.Minimum = 0;
             marginBox.Maximum = 80;
             marginBox.Value = 8;
@@ -532,14 +557,44 @@ namespace MoliWindowTiler
             return new Size(client.Width + frameWidth, client.Height + frameHeight);
         }
 
+        private LayoutAlignment SelectedAlignment()
+        {
+            return alignmentBox.SelectedIndex < 0
+                ? LayoutAlignment.Center
+                : (LayoutAlignment)alignmentBox.SelectedIndex;
+        }
+
+        private int SelectedGap()
+        {
+            return (int)gapBox.Value;
+        }
+
+        private static string AlignmentText(LayoutAlignment alignment)
+        {
+            switch (alignment)
+            {
+                case LayoutAlignment.TopLeft: return "左上";
+                case LayoutAlignment.TopCenter: return "上中";
+                case LayoutAlignment.TopRight: return "右上";
+                case LayoutAlignment.MiddleLeft: return "左中";
+                case LayoutAlignment.MiddleRight: return "右中";
+                case LayoutAlignment.BottomLeft: return "左下";
+                case LayoutAlignment.BottomCenter: return "下中";
+                case LayoutAlignment.BottomRight: return "右下";
+                default: return "居中";
+            }
+        }
+
         private LayoutChoice ChoosePlan(List<GameWindow> selected, Rectangle area)
         {
             int[] requestedRows = RequestedRows(selected.Count);
+            LayoutAlignment alignment = SelectedAlignment();
+            int gap = SelectedGap();
             if (!resizeBox.Checked)
             {
                 LayoutPlan keep = requestedRows == null
-                    ? global::MoliWindowTiler.LayoutEngine.Calculate(area, selected.Select(g => g.Bounds.Size).ToList(), 0)
-                    : global::MoliWindowTiler.LayoutEngine.Calculate(area, selected.Select(g => g.Bounds.Size).ToList(), requestedRows);
+                    ? global::MoliWindowTiler.LayoutEngine.Calculate(area, selected.Select(g => g.Bounds.Size).ToList(), 0, alignment, gap)
+                    : global::MoliWindowTiler.LayoutEngine.Calculate(area, selected.Select(g => g.Bounds.Size).ToList(), requestedRows, alignment, gap);
                 return new LayoutChoice { Plan = keep, ClientSize = selected[0].ClientSize, Fits = keep.ClippedArea == 0 && keep.HiddenRatio < 0.00001 };
             }
 
@@ -548,8 +603,8 @@ namespace MoliWindowTiler
             {
                 List<Size> outer = selected.Select(g => OuterSize(g, client)).ToList();
                 LayoutPlan plan = requestedRows == null
-                    ? global::MoliWindowTiler.LayoutEngine.Calculate(area, outer, 0)
-                    : global::MoliWindowTiler.LayoutEngine.Calculate(area, outer, requestedRows);
+                    ? global::MoliWindowTiler.LayoutEngine.Calculate(area, outer, 0, alignment, gap)
+                    : global::MoliWindowTiler.LayoutEngine.Calculate(area, outer, requestedRows, alignment, gap);
                 LayoutChoice current = new LayoutChoice { Plan = plan, ClientSize = client,
                     Fits = plan.ClippedArea == 0 && plan.HiddenRatio < 0.00001 };
                 if (best == null || BetterChoice(current, best)) best = current;
@@ -639,7 +694,10 @@ namespace MoliWindowTiler
                 currentPlan = choice.Plan;
                 currentClientSize = choice.ClientSize;
                 preview.SetPlan(choice.Plan, selected, area, choice.ClientSize);
-                string result = "已选 " + selected.Count + " 个，" + choice.Plan.Description + "，目标 " + choice.ClientSize.Width + "×" + choice.ClientSize.Height;
+                string result = "已选 " + selected.Count + " 个，" + choice.Plan.Description
+                    + "，对齐 " + AlignmentText(choice.Plan.Alignment)
+                    + "，间距 " + choice.Plan.Gap + "，目标 "
+                    + choice.ClientSize.Width + "×" + choice.ClientSize.Height;
                 if (choice.Plan.ClippedArea > 0 || choice.Plan.HiddenRatio > 0.00001)
                     result += "；当前屏幕不足，预计重叠/超出 " + (choice.Plan.HiddenRatio * 100).ToString("0.#") + "%";
                 else result += "；无重叠";
@@ -700,7 +758,9 @@ namespace MoliWindowTiler
             // Keep the row grouping shown in the preview. Re-running the smart
             // search here could turn a visible 3+3 preview into 2+4 after the
             // client reports its enforced outer size.
-            LayoutPlan finalPlan = global::MoliWindowTiler.LayoutEngine.Calculate(currentArea, actualSizes, currentPlan.RowCounts);
+            LayoutPlan finalPlan = global::MoliWindowTiler.LayoutEngine.Calculate(
+                currentArea, actualSizes, currentPlan.RowCounts,
+                currentPlan.Alignment, currentPlan.Gap);
             for (int i = 0; i < selected.Count && i < finalPlan.Windows.Length; i++)
             {
                 Rectangle target = finalPlan.Windows[i];

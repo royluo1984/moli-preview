@@ -2,6 +2,12 @@
 
 Windows 小工具，用于把当前打开的 `Reincarnation.exe` 客户端快速排列到显示器工作区中。
 
+## 下载
+
+**[⬇ 下载编译版 MoliWindowTiler.exe](https://github.com/royluo1984/moli-preview/releases/latest/download/MoliWindowTiler.exe)**
+
+[查看 Release 版本和校验值](https://github.com/royluo1984/moli-preview/releases)
+
 ## 功能
 
 - 自动识别当前打开的魔力宝贝客户端。

@@ -8,6 +8,63 @@ Windows 小工具，用于把当前打开的 `Reincarnation.exe` 客户端快速
 
 [查看 Release 版本和校验值](https://github.com/royluo1984/moli-preview/releases)
 
+## 环境要求
+
+### 运行已编译版本
+
+- Windows 7 SP1 或更高版本，建议使用 Windows 10/11。
+- 已安装 .NET Framework 4.8 Runtime。程序的项目目标为 .NET Framework 4.0，4.8 Runtime 可以兼容运行；Windows 10/11 通常已经内置兼容组件。
+- 至少连接一个显示器，并使用桌面窗口会话运行程序。
+- 需要排列的游戏客户端应为窗口模式，并且进程名称为 `Reincarnation.exe`。
+
+发布版不需要安装 .NET SDK、Visual Studio 或其他第三方库。若启动时提示缺少 .NET Framework，请从微软官方下载并安装：
+
+- [.NET Framework 4.8 Runtime（微软官方下载）](https://dotnet.microsoft.com/download/dotnet-framework/net48)
+- [.NET Framework 4.8 Developer Pack（从源码编译时使用）](https://dotnet.microsoft.com/download/dotnet-framework/net48)
+
+安装完成后重新启动 `MoliWindowTiler.exe`。建议把程序放在用户有读写权限的目录，例如 `D:\Tools\moli-preview`，这样程序可以保存窗口位置、设置和错误日志。
+
+### 从源码编译
+
+- Windows 系统及 .NET Framework 4.x 的 C# 编译器。`build_window_tiler.cmd` 会自动查找 `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe`，找不到时再查找 32 位编译器目录。
+- Git（仅在使用 `git clone` 获取源码时需要）：[Git for Windows 官方下载](https://git-scm.com/download/win)。
+- 若系统没有可用的 .NET Framework 编译器，可安装上面的 [.NET Framework 4.8 Developer Pack](https://dotnet.microsoft.com/download/dotnet-framework/net48)。
+
+源码构建不依赖 NuGet 包或其他第三方库。
+
+## 安装与首次运行
+
+### 直接安装发布版
+
+1. 打开 [Releases](https://github.com/royluo1984/moli-preview/releases) 页面，下载最新的 `MoliWindowTiler.exe`。
+2. 将 exe 保存到单独的文件夹中；首次使用前确认已安装上面的 .NET Framework 4.8 Runtime。
+3. 先启动一个或多个窗口模式的游戏客户端，再双击 `MoliWindowTiler.exe`。
+4. 点击“刷新窗口”，确认客户端列表出现后勾选要排列的账号。
+5. 选择排列方式、对齐方式、间距和目标屏幕，然后点击“一键排列”。
+
+程序首次运行后，会在 exe 所在目录生成以下本地文件：
+
+- `moli-settings.json`：排列方式、间距、目标屏幕等设置。
+- `character-positions.json`：按人物名称保存的窗口位置。
+- `WindowTiler-error.log`：运行异常记录。
+
+### 从 GitHub 源码安装
+
+在 PowerShell 或命令提示符中执行：
+
+```powershell
+git clone https://github.com/royluo1984/moli-preview.git
+cd moli-preview
+.\build_window_tiler.cmd
+.\run_window_tiler.cmd
+```
+
+编译成功后，程序位于 `WindowTiler\bin\Release\MoliWindowTiler.exe`。也可以直接运行该 exe；`run_window_tiler.cmd` 在找不到编译结果时会先调用构建脚本。
+
+### 升级
+
+下载新版本 exe 后，替换旧的 `MoliWindowTiler.exe` 即可。若希望保留上次的排列位置和界面设置，请保留同一目录下的 `moli-settings.json` 与 `character-positions.json`。
+
 ## 功能
 
 - 自动识别当前打开的魔力宝贝客户端。
@@ -41,7 +98,7 @@ Windows 小工具，用于把当前打开的 `Reincarnation.exe` 客户端快速
 build_window_tiler.cmd
 ```
 
-编译输出为 `WindowTiler\\bin\\Release\\MoliWindowTiler.exe`。
+编译输出为 `WindowTiler\bin\Release\MoliWindowTiler.exe`。
 
 ## 项目结构
 

@@ -18,6 +18,7 @@ namespace MoliWindowTiler
         [DataMember(Name = "showSwitcher", Order = 7)] public bool ShowSwitcher = true;
         [DataMember(Name = "hasSelection", Order = 8)] public bool HasSelection;
         [DataMember(Name = "selectedCharacters", Order = 9)] public List<string> SelectedCharacters;
+        [DataMember(Name = "clientOrder", Order = 10)] public List<string> ClientOrder;
     }
 
     internal sealed class SettingsStore
@@ -59,7 +60,8 @@ namespace MoliWindowTiler
                 Monitor = "",
                 ShowSwitcher = true,
                 HasSelection = false,
-                SelectedCharacters = new List<string>()
+                SelectedCharacters = new List<string>(),
+                ClientOrder = new List<string>()
             };
         }
 

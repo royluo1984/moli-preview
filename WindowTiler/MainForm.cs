@@ -161,6 +161,7 @@ namespace MoliWindowTiler
         private bool hasSavedSelection;
         private string preferredMonitor;
         private readonly HashSet<string> preferredCharacters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly List<string> preferredOrder = new List<string>();
 
         public MainForm()
         {
@@ -168,6 +169,7 @@ namespace MoliWindowTiler
             settingsStore = new SettingsStore();
             switcher = new SwitcherOverlay(ActivateGame);
             switcher.UserClosed += delegate { if (!IsDisposed && !Disposing) switcherBox.Checked = false; };
+            switcher.OrderChanged += HandleSwitcherOrderChanged;
             Text = "魔力宝贝窗口排列器";
             StartPosition = FormStartPosition.CenterScreen;
             MinimumSize = new Size(860, 560);
@@ -386,6 +388,14 @@ namespace MoliWindowTiler
                     foreach (string character in settings.SelectedCharacters)
                         if (!string.IsNullOrWhiteSpace(character)) preferredCharacters.Add(character.Trim());
                 }
+                preferredOrder.Clear();
+                if (settings.ClientOrder != null)
+                {
+                    foreach (string identity in settings.ClientOrder)
+                        if (!string.IsNullOrWhiteSpace(identity) &&
+                            !preferredOrder.Any(existing => string.Equals(existing, identity.Trim(), StringComparison.OrdinalIgnoreCase)))
+                            preferredOrder.Add(identity.Trim());
+                }
                 customRowsBox.Enabled = columnsBox.SelectedIndex == 5;
             }
             finally
@@ -415,7 +425,7 @@ namespace MoliWindowTiler
                     {
                         GameWindow game = item.Tag as GameWindow;
                         if (item.Checked && game != null && !string.IsNullOrWhiteSpace(game.CharacterName))
-                            preferredCharacters.Add(game.CharacterName.Trim());
+                            preferredCharacters.Add(PositionStore.IdentityFor(game));
                     }
                     hasSavedSelection = true;
                 }
@@ -429,7 +439,8 @@ namespace MoliWindowTiler
                     Monitor = preferredMonitor ?? "",
                     ShowSwitcher = switcherBox.Checked,
                     HasSelection = hasSavedSelection,
-                    SelectedCharacters = preferredCharacters.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList()
+                    SelectedCharacters = preferredCharacters.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList(),
+                    ClientOrder = preferredOrder.ToList()
                 });
             }
             catch
@@ -478,9 +489,10 @@ namespace MoliWindowTiler
             refreshingWindows = true;
             try
             {
-                games = Native.FindGames();
+                List<GameWindow> found = Native.FindGames();
+                ApplySavedPositions(found);
+                games = ApplyPreferredOrder(found);
                 closeAllButton.Enabled = games.Count > 0;
-                ApplySavedPositions(games);
                 windowList.BeginUpdate();
                 windowList.Items.Clear();
                 foreach (GameWindow game in games)
@@ -496,7 +508,7 @@ namespace MoliWindowTiler
                     if (checkedState.ContainsKey(game.Key))
                         item.Checked = checkedState[game.Key];
                     else if (hasSavedSelection)
-                        item.Checked = preferredCharacters.Contains(game.CharacterName);
+                        item.Checked = preferredCharacters.Any(identity => PositionStore.MatchesIdentity(identity, game));
                     else
                         item.Checked = true;
                     windowList.Items.Add(item);
@@ -518,6 +530,69 @@ namespace MoliWindowTiler
             }
             UpdateSwitcher();
             UpdatePlan();
+        }
+
+        private List<GameWindow> ApplyPreferredOrder(List<GameWindow> found)
+        {
+            if (found == null || found.Count <= 1 || preferredOrder.Count == 0)
+                return found ?? new List<GameWindow>();
+            List<GameWindow> remaining = new List<GameWindow>(found);
+            List<GameWindow> ordered = new List<GameWindow>();
+            foreach (string identity in preferredOrder)
+            {
+                GameWindow match = remaining.FirstOrDefault(game => PositionStore.MatchesIdentity(identity, game));
+                if (match == null) continue;
+                ordered.Add(match);
+                remaining.Remove(match);
+            }
+            ordered.AddRange(remaining);
+            return ordered;
+        }
+
+        private void RememberClientOrder(IList<GameWindow> ordered)
+        {
+            if (ordered == null) return;
+            List<string> next = new List<string>();
+            foreach (GameWindow game in ordered)
+            {
+                string identity = PositionStore.IdentityFor(game);
+                if (!string.IsNullOrWhiteSpace(identity) &&
+                    !next.Any(existing => string.Equals(existing, identity, StringComparison.OrdinalIgnoreCase)))
+                    next.Add(identity);
+            }
+            foreach (string identity in preferredOrder)
+            {
+                if (!string.IsNullOrWhiteSpace(identity) &&
+                    !next.Any(existing => string.Equals(existing, identity, StringComparison.OrdinalIgnoreCase)))
+                    next.Add(identity);
+            }
+            preferredOrder.Clear();
+            preferredOrder.AddRange(next);
+        }
+
+        private void HandleSwitcherOrderChanged(IList<IntPtr> handles)
+        {
+            if (!controlsReady || handles == null || handles.Count < 2 || games == null) return;
+            Dictionary<IntPtr, GameWindow> byHandle = new Dictionary<IntPtr, GameWindow>();
+            foreach (GameWindow game in games)
+            {
+                if (game != null && !byHandle.ContainsKey(game.Handle)) byHandle.Add(game.Handle, game);
+            }
+            List<GameWindow> ordered = new List<GameWindow>();
+            HashSet<IntPtr> added = new HashSet<IntPtr>();
+            foreach (IntPtr handle in handles)
+            {
+                GameWindow game;
+                if (byHandle.TryGetValue(handle, out game) && added.Add(handle)) ordered.Add(game);
+            }
+            foreach (GameWindow game in games)
+                if (game != null && added.Add(game.Handle)) ordered.Add(game);
+            if (ordered.Count < 2) return;
+            games = ordered;
+            RememberClientOrder(games);
+            SaveSettings();
+            statusLabel.Text = "已交换客户端顺序，正在保存并重新排列窗口。";
+            ArrangeWindows();
         }
 
         private void CaptureCurrentPositions()
@@ -545,7 +620,7 @@ namespace MoliWindowTiler
             if (found == null) return;
             foreach (GameWindow game in found)
             {
-                SavedWindowPosition saved = positionStore.Get(game.CharacterName);
+                SavedWindowPosition saved = positionStore.Get(game);
                 if (saved == null) continue;
                 try
                 {
@@ -591,13 +666,18 @@ namespace MoliWindowTiler
         private List<GameWindow> SelectedGames()
         {
             if (windowList.IsDisposed) return new List<GameWindow>();
-            List<GameWindow> result = new List<GameWindow>();
+            List<GameWindow> checkedGames = new List<GameWindow>();
             foreach (ListViewItem item in windowList.Items)
             {
                 if (item == null || !item.Checked) continue;
                 GameWindow game = item.Tag as GameWindow;
-                if (game != null && Native.IsWindow(game.Handle)) result.Add(game);
+                if (game != null && Native.IsWindow(game.Handle)) checkedGames.Add(game);
             }
+            if (checkedGames.Count <= 1 || games == null || games.Count == 0) return checkedGames;
+            HashSet<string> selected = new HashSet<string>(checkedGames.Select(game => game.Key));
+            List<GameWindow> result = games.Where(game => game != null && selected.Contains(game.Key)).ToList();
+            HashSet<string> added = new HashSet<string>(result.Select(game => game.Key));
+            result.AddRange(checkedGames.Where(game => !added.Contains(game.Key)));
             return result;
         }
 

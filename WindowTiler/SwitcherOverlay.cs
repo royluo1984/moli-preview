@@ -14,8 +14,13 @@ namespace MoliWindowTiler
         private readonly FlowLayoutPanel buttons = new FlowLayoutPanel();
         private readonly Label caption = new Label();
         private readonly Button closeButton = new Button();
+        private Button pressedButton;
+        private Point pressedPoint;
+        private bool dragging;
+        private bool ignoreNextClick;
 
         public event EventHandler UserClosed;
+        public event Action<IList<IntPtr>> OrderChanged;
 
         public SwitcherOverlay(Action<IntPtr> activate)
         {
@@ -32,7 +37,7 @@ namespace MoliWindowTiler
             Width = 390;
             Height = 92;
 
-            caption.Text = "  点击切换客户端";
+            caption.Text = "  点击切换；拖动交换位置";
             caption.ForeColor = Color.White;
             caption.Font = new Font(Font, FontStyle.Bold);
             caption.AutoSize = false;
@@ -60,6 +65,7 @@ namespace MoliWindowTiler
             buttons.Size = new Size(Width - 12, Height - 38);
             buttons.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             buttons.Padding = new Padding(0);
+            buttons.AllowDrop = true;
             Controls.Add(buttons);
         }
 
@@ -98,16 +104,27 @@ namespace MoliWindowTiler
                     button.ForeColor = Color.White;
                     button.Cursor = Cursors.Hand;
                     button.TabStop = false;
+                    button.MouseDown += ButtonMouseDown;
+                    button.MouseMove += ButtonMouseMove;
+                    button.MouseUp += ButtonMouseUp;
                     ToolTip tip = new ToolTip();
-                    tip.SetToolTip(button, game.CharacterName + "  (线程 " + game.ThreadId + ")");
+                    string thread = string.IsNullOrWhiteSpace(game.ThreadDescription)
+                        ? game.ThreadId.ToString()
+                        : game.ThreadId + " / " + game.ThreadDescription.Trim();
+                    tip.SetToolTip(button, game.CharacterName + "  (线程 " + thread + ")");
                     button.Click += delegate(object sender, EventArgs args)
                     {
+                        if (ignoreNextClick)
+                        {
+                            ignoreNextClick = false;
+                            return;
+                        }
                         Button clicked = sender as Button;
                         if (clicked != null && clicked.Tag is IntPtr) activate((IntPtr)clicked.Tag);
                     };
                     buttons.Controls.Add(button);
                 }
-                caption.Text = "  点击切换客户端（" + buttons.Controls.Count + " 个）";
+                caption.Text = "  点击切换；拖动交换位置（" + buttons.Controls.Count + " 个）";
                 Height = buttons.Controls.Count <= 3 ? 72 : 108;
                 buttons.Height = Height - 38;
             }
@@ -135,6 +152,102 @@ namespace MoliWindowTiler
         {
             value = string.IsNullOrWhiteSpace(value) ? "未命名客户端" : value.Trim();
             return value.Length > 14 ? value.Substring(0, 14) + "…" : value;
+        }
+
+        private void ButtonMouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left) return;
+            pressedButton = sender as Button;
+            pressedPoint = e.Location;
+            dragging = false;
+        }
+
+        private void ButtonMouseMove(object sender, MouseEventArgs e)
+        {
+            Button button = sender as Button;
+            if (button == null || pressedButton != button || e.Button != MouseButtons.Left) return;
+            if (dragging) return;
+            Rectangle threshold = new Rectangle(
+                pressedPoint.X - SystemInformation.DragSize.Width / 2,
+                pressedPoint.Y - SystemInformation.DragSize.Height / 2,
+                SystemInformation.DragSize.Width,
+                SystemInformation.DragSize.Height);
+            if (threshold.Contains(e.Location)) return;
+            dragging = true;
+            ignoreNextClick = true;
+            button.Capture = true;
+            button.BackColor = Color.FromArgb(88, 112, 150);
+        }
+
+        private void ButtonMouseUp(object sender, MouseEventArgs e)
+        {
+            Button source = sender as Button;
+            if (source == null || pressedButton != source || e.Button != MouseButtons.Left) return;
+            bool wasDragging = dragging;
+            Button target = wasDragging ? FindDropTarget(source, Cursor.Position) : null;
+            source.Capture = false;
+            source.BackColor = Color.FromArgb(54, 63, 78);
+            pressedButton = null;
+            dragging = false;
+            if (!wasDragging) return;
+            if (target != null && target != source)
+            {
+                SwapButtons(source, target);
+                RaiseOrderChanged();
+            }
+            ClearIgnoredClickLater();
+        }
+
+        private Button FindDropTarget(Button source, Point screenPoint)
+        {
+            Point point = buttons.PointToClient(screenPoint);
+            foreach (Control control in buttons.Controls)
+            {
+                Button button = control as Button;
+                if (button != null && button != source && button.Visible && button.Bounds.Contains(point))
+                    return button;
+            }
+            return null;
+        }
+
+        private void SwapButtons(Button first, Button second)
+        {
+            int firstIndex = buttons.Controls.GetChildIndex(first);
+            int secondIndex = buttons.Controls.GetChildIndex(second);
+            if (firstIndex < 0 || secondIndex < 0 || firstIndex == secondIndex) return;
+            List<Control> ordered = buttons.Controls.Cast<Control>().ToList();
+            ordered[firstIndex] = second;
+            ordered[secondIndex] = first;
+            buttons.SuspendLayout();
+            try
+            {
+                buttons.Controls.Clear();
+                buttons.Controls.AddRange(ordered.ToArray());
+            }
+            finally { buttons.ResumeLayout(true); }
+        }
+
+        private void RaiseOrderChanged()
+        {
+            Action<IList<IntPtr>> handler = OrderChanged;
+            if (handler == null) return;
+            List<IntPtr> handles = new List<IntPtr>();
+            foreach (Control control in buttons.Controls)
+            {
+                Button button = control as Button;
+                if (button != null && button.Tag is IntPtr) handles.Add((IntPtr)button.Tag);
+            }
+            handler(handles);
+        }
+
+        private void ClearIgnoredClickLater()
+        {
+            if (!IsDisposed && IsHandleCreated)
+            {
+                try { BeginInvoke((MethodInvoker)delegate { ignoreNextClick = false; }); }
+                catch { ignoreNextClick = false; }
+            }
+            else ignoreNextClick = false;
         }
     }
 }

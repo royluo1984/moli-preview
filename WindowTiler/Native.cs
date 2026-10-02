@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
@@ -155,22 +156,66 @@ namespace MoliWindowTiler
 
         internal static string CharacterFromWindow(string title, string threadDescription, uint threadId)
         {
-            string threadName = (threadDescription ?? "").Trim();
-            if (!string.IsNullOrWhiteSpace(threadName) && !LooksGeneric(threadName))
-                return CleanCharacter(threadName);
+            foreach (string value in CharacterCandidates(title, threadDescription, threadId))
+            {
+                if (!string.IsNullOrWhiteSpace(value) && !LooksGeneric(value))
+                    return CleanCharacter(value);
+            }
+            return "未命名-线程" + threadId;
+        }
 
-            string value = (title ?? "").Trim();
+        internal static List<string> CharacterCandidates(GameWindow game)
+        {
+            if (game == null) return new List<string>();
+            List<string> result = CharacterCandidates(game.Title, game.ThreadDescription, game.ThreadId);
+            AddCandidate(result, game.CharacterName);
+            return result;
+        }
+
+        internal static List<string> CharacterCandidates(string title, string threadDescription, uint threadId)
+        {
+            List<string> result = new List<string>();
+            AddSourceCandidates(result, threadDescription);
+            AddSourceCandidates(result, title);
+            AddCandidate(result, "未命名-线程" + threadId);
+            return result;
+        }
+
+        private static void AddSourceCandidates(List<string> result, string source)
+        {
+            string value = CleanCharacter(source);
+            if (string.IsNullOrWhiteSpace(value)) return;
+
             int separator = value.LastIndexOf("--", StringComparison.Ordinal);
             if (separator >= 0 && separator + 2 < value.Length)
-                value = value.Substring(separator + 2).Trim();
-            else
-            {
-                int reincarnation = value.IndexOf("Reincarnation", StringComparison.OrdinalIgnoreCase);
-                if (reincarnation >= 0) value = value.Substring(reincarnation + "Reincarnation".Length).Trim();
-                value = value.Trim('-', ' ', '\t', '[', ']');
-            }
+                AddCandidate(result, value.Substring(separator + 2));
+
+            int closingBracket = value.LastIndexOf(']');
+            if (separator < 0 && closingBracket >= 0 && closingBracket + 1 < value.Length)
+                AddCandidate(result, value.Substring(closingBracket + 1));
+
+            int closingParenthesis = value.LastIndexOf(')');
+            int openingParenthesis = value.LastIndexOf('(');
+            if (openingParenthesis >= 0 && closingParenthesis > openingParenthesis + 1)
+                AddCandidate(result, value.Substring(openingParenthesis + 1,
+                    closingParenthesis - openingParenthesis - 1));
+
+            int dash = value.LastIndexOf('-');
+            if (dash >= 0 && dash + 1 < value.Length)
+                AddCandidate(result, value.Substring(dash + 1));
+
+            int reincarnation = value.IndexOf("Reincarnation", StringComparison.OrdinalIgnoreCase);
+            if (separator < 0 && reincarnation >= 0 && reincarnation + "Reincarnation".Length < value.Length)
+                AddCandidate(result, value.Substring(reincarnation + "Reincarnation".Length));
+
+            AddCandidate(result, value);
+        }
+
+        private static void AddCandidate(List<string> result, string value)
+        {
             value = CleanCharacter(value);
-            return string.IsNullOrWhiteSpace(value) ? "未命名-线程" + threadId : value;
+            if (string.IsNullOrWhiteSpace(value)) return;
+            if (!result.Any(existing => string.Equals(existing, value, StringComparison.OrdinalIgnoreCase))) result.Add(value);
         }
 
         private static string CleanCharacter(string value)

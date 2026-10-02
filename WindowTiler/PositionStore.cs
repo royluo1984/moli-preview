@@ -21,6 +21,11 @@ namespace MoliWindowTiler
         [DataMember(Name = "screen", Order = 6)] public string Screen;
         [DataMember(Name = "thread", Order = 7)] public uint ThreadId;
         [DataMember(Name = "updated", Order = 8)] public string Updated;
+        [DataMember(Name = "aliases", Order = 9)] public List<string> Aliases;
+        [DataMember(Name = "pid", Order = 10)] public int ProcessId;
+        [DataMember(Name = "started", Order = 11)] public long Started;
+        [DataMember(Name = "threadDescription", Order = 12)] public string ThreadDescription;
+        [DataMember(Name = "title", Order = 13)] public string Title;
 
         public Rectangle Bounds { get { return new Rectangle(Left, Top, Width, Height); } }
     }
@@ -47,29 +52,59 @@ namespace MoliWindowTiler
 
         public SavedWindowPosition Get(string character)
         {
-            if (string.IsNullOrWhiteSpace(character)) return null;
+            string key = NameKey(character);
+            if (key == null) return null;
             SavedWindowPosition value;
-            return positions.TryGetValue(character.Trim(), out value) ? value : null;
+            return positions.TryGetValue(key, out value) ? value : null;
+        }
+
+        public SavedWindowPosition Get(GameWindow game)
+        {
+            if (game == null) return null;
+            foreach (string key in CandidateKeys(game))
+            {
+                SavedWindowPosition value;
+                if (positions.TryGetValue(key, out value)) return value;
+            }
+            return null;
         }
 
         public void Set(GameWindow game, Rectangle bounds)
         {
-            if (game == null || string.IsNullOrWhiteSpace(game.CharacterName) || bounds.Width <= 0 || bounds.Height <= 0)
+            if (game == null || bounds.Width <= 0 || bounds.Height <= 0) return;
+            List<string> keys = CandidateKeys(game).ToList();
+            if (keys.Count == 0)
                 return;
+            SavedWindowPosition record = Get(game) ?? new SavedWindowPosition();
+            string identity = IdentityFor(game);
             Screen screen = null;
             try { screen = Screen.FromHandle(game.Handle); }
             catch { }
-            positions[game.CharacterName.Trim()] = new SavedWindowPosition
+            record.Character = identity;
+            record.Left = bounds.Left;
+            record.Top = bounds.Top;
+            record.Width = bounds.Width;
+            record.Height = bounds.Height;
+            record.Screen = screen == null ? "" : screen.DeviceName;
+            record.ThreadId = game.ThreadId;
+            record.ProcessId = game.Pid;
+            record.Started = game.Started;
+            record.ThreadDescription = game.ThreadDescription ?? "";
+            record.Title = game.Title ?? "";
+            record.Updated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+            List<string> aliases = record.Aliases == null
+                ? new List<string>()
+                : new List<string>(record.Aliases);
+            foreach (string key in keys)
             {
-                Character = game.CharacterName.Trim(),
-                Left = bounds.Left,
-                Top = bounds.Top,
-                Width = bounds.Width,
-                Height = bounds.Height,
-                Screen = screen == null ? "" : screen.DeviceName,
-                ThreadId = game.ThreadId,
-                Updated = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
-            };
+                string alias = AliasFromKey(key);
+                if (!string.IsNullOrWhiteSpace(alias) &&
+                    !aliases.Any(existing => string.Equals(existing, alias, StringComparison.OrdinalIgnoreCase)))
+                    aliases.Add(alias);
+                positions[key] = record;
+            }
+            record.Aliases = aliases;
+            positions[NameKey(record.Character)] = record;
         }
 
         public void Save()
@@ -80,7 +115,7 @@ namespace MoliWindowTiler
                 if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
                 PositionDocument document = new PositionDocument
                 {
-                    Positions = positions.Values.OrderBy(p => p.Character, StringComparer.OrdinalIgnoreCase).ToList()
+                    Positions = positions.Values.Distinct().OrderBy(p => p.Character, StringComparer.OrdinalIgnoreCase).ToList()
                 };
                 DataContractJsonSerializer serializer = new DataContractJsonSerializer(typeof(PositionDocument));
                 string temporary = FilePath + ".tmp";
@@ -108,7 +143,7 @@ namespace MoliWindowTiler
                     {
                         if (position != null && !string.IsNullOrWhiteSpace(position.Character) &&
                             position.Width > 0 && position.Height > 0)
-                            positions[position.Character.Trim()] = position;
+                            Index(position);
                     }
                 }
             }
@@ -128,6 +163,105 @@ namespace MoliWindowTiler
                 directory = directory.Parent;
             }
             return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "character-positions.json");
+        }
+
+        public static string IdentityFor(GameWindow game)
+        {
+            if (game == null) return "";
+            foreach (string candidate in Native.CharacterCandidates(game))
+            {
+                if (!IsAnonymous(candidate)) return candidate.Trim();
+            }
+            return game.ThreadId == 0 ? "" : "线程" + game.ThreadId;
+        }
+
+        public static bool MatchesIdentity(string saved, GameWindow game)
+        {
+            if (string.IsNullOrWhiteSpace(saved) || game == null) return false;
+            string expected = Normalize(saved);
+            foreach (string candidate in Native.CharacterCandidates(game))
+            {
+                if (string.Equals(expected, Normalize(candidate), StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return string.Equals(expected, IdentityFor(game), StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void Index(SavedWindowPosition position)
+        {
+            AddIndex(NameKey(position.Character), position);
+            if (position.Aliases != null)
+            {
+                foreach (string alias in position.Aliases)
+                    AddIndex(NameKey(alias), position);
+            }
+            if (position.ThreadId != 0) AddIndex(ThreadKey(position.ThreadId), position);
+            if (position.ProcessId != 0 && position.Started != 0)
+                AddIndex(ProcessKey(position.ProcessId, position.Started), position);
+        }
+
+        private void AddIndex(string key, SavedWindowPosition position)
+        {
+            if (string.IsNullOrWhiteSpace(key) || position == null) return;
+            SavedWindowPosition existing;
+            if (!positions.TryGetValue(key, out existing) || IsNewer(position, existing))
+                positions[key] = position;
+        }
+
+        private static bool IsNewer(SavedWindowPosition candidate, SavedWindowPosition existing)
+        {
+            if (existing == null) return true;
+            return string.Compare(candidate.Updated ?? "", existing.Updated ?? "", StringComparison.Ordinal) >= 0;
+        }
+
+        private static IEnumerable<string> CandidateKeys(GameWindow game)
+        {
+            List<string> keys = new List<string>();
+            foreach (string candidate in Native.CharacterCandidates(game))
+            {
+                string key = NameKey(candidate);
+                if (key != null && !keys.Any(existing => string.Equals(existing, key, StringComparison.OrdinalIgnoreCase))) keys.Add(key);
+            }
+            string threadKey = ThreadKey(game.ThreadId);
+            if (threadKey != null) keys.Add(threadKey);
+            string processKey = ProcessKey(game.Pid, game.Started);
+            if (processKey != null) keys.Add(processKey);
+            return keys;
+        }
+
+        private static string AliasFromKey(string key)
+        {
+            if (key == null || !key.StartsWith("name:", StringComparison.OrdinalIgnoreCase)) return null;
+            return key.Substring(5);
+        }
+
+        private static string NameKey(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return null;
+            return "name:" + Normalize(value);
+        }
+
+        private static string ThreadKey(uint threadId)
+        {
+            return threadId == 0 ? null : "thread:" + threadId;
+        }
+
+        private static string ProcessKey(int pid, long started)
+        {
+            return pid == 0 || started == 0 ? null : "process:" + pid + ":" + started;
+        }
+
+        private static bool IsAnonymous(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return true;
+            string normalized = Normalize(value);
+            return normalized.StartsWith("未命名-线程", StringComparison.OrdinalIgnoreCase) ||
+                normalized.StartsWith("线程", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string Normalize(string value)
+        {
+            return (value ?? "").Trim().Trim('-', ' ', '\t', '[', ']').ToLowerInvariant();
         }
     }
 }

@@ -181,7 +181,8 @@ namespace MoliWindowTiler
             string expected = Normalize(saved);
             foreach (string candidate in Native.CharacterCandidates(game))
             {
-                if (string.Equals(expected, Normalize(candidate), StringComparison.OrdinalIgnoreCase))
+                if (!IsAnonymous(candidate) &&
+                    string.Equals(expected, Normalize(candidate), StringComparison.OrdinalIgnoreCase))
                     return true;
             }
             return string.Equals(expected, IdentityFor(game), StringComparison.OrdinalIgnoreCase);
@@ -256,7 +257,10 @@ namespace MoliWindowTiler
             if (string.IsNullOrWhiteSpace(value)) return true;
             string normalized = Normalize(value);
             return normalized.StartsWith("未命名-线程", StringComparison.OrdinalIgnoreCase) ||
-                normalized.StartsWith("线程", StringComparison.OrdinalIgnoreCase);
+                normalized.StartsWith("线程", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(normalized, "reincarnation", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(normalized, "cg", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(normalized, "主线程", StringComparison.OrdinalIgnoreCase);
         }
 
         private static string Normalize(string value)

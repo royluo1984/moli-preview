@@ -220,6 +220,7 @@ namespace MoliWindowTiler
             List<string> keys = new List<string>();
             foreach (string candidate in Native.CharacterCandidates(game))
             {
+                if (IsAnonymous(candidate)) continue;
                 string key = NameKey(candidate);
                 if (key != null && !keys.Any(existing => string.Equals(existing, key, StringComparison.OrdinalIgnoreCase))) keys.Add(key);
             }

@@ -20,6 +20,7 @@ namespace MoliWindowTiler
         [DataMember(Name = "selectedCharacters", Order = 9)] public List<string> SelectedCharacters;
         [DataMember(Name = "clientOrder", Order = 10)] public List<string> ClientOrder;
         [DataMember(Name = "clientHotkeys", Order = 11)] public List<ClientHotkeyBinding> ClientHotkeys;
+        [DataMember(Name = "minimizeToTray", Order = 12)] public bool MinimizeToTray = true;
     }
 
     internal sealed class SettingsStore
@@ -36,11 +37,15 @@ namespace MoliWindowTiler
             try
             {
                 if (!File.Exists(FilePath)) return Defaults();
+                string json = File.ReadAllText(FilePath);
+                bool hasTraySetting = json.IndexOf("\"minimizeToTray\"", StringComparison.OrdinalIgnoreCase) >= 0;
                 DataContractJsonSerializer serializer = new DataContractJsonSerializer(typeof(AppSettings));
-                using (FileStream stream = File.OpenRead(FilePath))
+                using (MemoryStream stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json)))
                 {
                     AppSettings settings = serializer.ReadObject(stream) as AppSettings;
-                    return settings ?? Defaults();
+                    if (settings == null) return Defaults();
+                    if (!hasTraySetting) settings.MinimizeToTray = true;
+                    return settings;
                 }
             }
             catch
@@ -63,7 +68,8 @@ namespace MoliWindowTiler
                 HasSelection = false,
                 SelectedCharacters = new List<string>(),
                 ClientOrder = new List<string>(),
-                ClientHotkeys = new List<ClientHotkeyBinding>()
+                ClientHotkeys = new List<ClientHotkeyBinding>(),
+                MinimizeToTray = true
             };
         }
 

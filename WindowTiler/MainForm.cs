@@ -145,6 +145,7 @@ namespace MoliWindowTiler
         private readonly Button arrangeButton = new Button();
         private readonly Button restoreButton = new Button();
         private readonly Button closeAllButton = new Button();
+        private readonly Button hotkeyButton = new Button();
         private readonly PreviewPanel preview = new PreviewPanel();
         private readonly Dictionary<string, WindowSnapshot> snapshots = new Dictionary<string, WindowSnapshot>();
         private readonly PositionStore positionStore;
@@ -162,6 +163,11 @@ namespace MoliWindowTiler
         private string preferredMonitor;
         private readonly HashSet<string> preferredCharacters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly List<string> preferredOrder = new List<string>();
+        private readonly List<ClientHotkeyBinding> clientHotkeys = new List<ClientHotkeyBinding>();
+        private readonly Dictionary<int, ClientHotkeyBinding> registeredHotkeys =
+            new Dictionary<int, ClientHotkeyBinding>();
+        private readonly List<string> hotkeyFailures = new List<string>();
+        private const int FirstHotkeyId = 0x5200;
 
         public MainForm()
         {
@@ -182,10 +188,12 @@ namespace MoliWindowTiler
             {
                 CaptureCurrentPositions();
                 SaveSettings();
+                UnregisterClientHotkeys();
                 if (switcher != null && !switcher.IsDisposed) switcher.Close();
             };
             RefreshMonitors();
             RefreshWindows();
+            if (IsHandleCreated) RegisterClientHotkeys();
         }
 
         private void BuildControls()
@@ -279,6 +287,13 @@ namespace MoliWindowTiler
             switcherBox.CheckedChanged += delegate { SaveSettings(); UpdateSwitcher(); };
             optionFlow.Controls.Add(switcherBox);
 
+            hotkeyButton.Text = "设置客户端快捷键";
+            hotkeyButton.Width = 128;
+            hotkeyButton.Height = 25;
+            hotkeyButton.Margin = new Padding(10, 3, 3, 0);
+            hotkeyButton.Click += delegate { ConfigureClientHotkeys(); };
+            optionFlow.Controls.Add(hotkeyButton);
+
             optionFlow.Controls.Add(new Label { Text = "屏幕边距", AutoSize = true, Margin = new Padding(10, 7, 3, 0) });
             marginBox.Minimum = 0;
             marginBox.Maximum = 80;
@@ -300,6 +315,7 @@ namespace MoliWindowTiler
             windowList.HideSelection = false;
             windowList.Columns.Add("PID", 58);
             windowList.Columns.Add("人物", 150);
+            windowList.Columns.Add("快捷键", 125);
             windowList.Columns.Add("线程", 65);
             windowList.Columns.Add("客户端标题", 220);
             windowList.Columns.Add("分辨率", 116);
@@ -396,6 +412,21 @@ namespace MoliWindowTiler
                             !preferredOrder.Any(existing => string.Equals(existing, identity.Trim(), StringComparison.OrdinalIgnoreCase)))
                             preferredOrder.Add(identity.Trim());
                 }
+                clientHotkeys.Clear();
+                if (settings.ClientHotkeys != null)
+                {
+                    foreach (ClientHotkeyBinding binding in settings.ClientHotkeys)
+                    {
+                        if (binding == null || !binding.IsValid) continue;
+                        if (!clientHotkeys.Any(existing =>
+                            string.Equals(existing.Identity, binding.Identity.Trim(), StringComparison.OrdinalIgnoreCase)))
+                        {
+                            ClientHotkeyBinding copy = binding.Clone();
+                            copy.Identity = copy.Identity.Trim();
+                            clientHotkeys.Add(copy);
+                        }
+                    }
+                }
                 customRowsBox.Enabled = columnsBox.SelectedIndex == 5;
             }
             finally
@@ -440,7 +471,8 @@ namespace MoliWindowTiler
                     ShowSwitcher = switcherBox.Checked,
                     HasSelection = hasSavedSelection,
                     SelectedCharacters = preferredCharacters.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList(),
-                    ClientOrder = preferredOrder.ToList()
+                    ClientOrder = preferredOrder.ToList(),
+                    ClientHotkeys = clientHotkeys.Select(binding => binding.Clone()).ToList()
                 });
             }
             catch
@@ -499,6 +531,7 @@ namespace MoliWindowTiler
                 {
                     ListViewItem item = new ListViewItem(game.Pid.ToString());
                     item.SubItems.Add(game.CharacterName);
+                    item.SubItems.Add(HotkeyTextFor(game));
                     item.SubItems.Add(game.ThreadId.ToString());
                     item.SubItems.Add(string.IsNullOrWhiteSpace(game.Title) ? "（无标题）" : game.Title.Trim());
                     item.SubItems.Add(game.Resolution);
@@ -807,11 +840,152 @@ namespace MoliWindowTiler
             }
             try
             {
-                switcher.SetWindows(games);
+                switcher.SetWindows(games, HotkeyTextFor);
                 Screen screen = games.Count == 0 ? Screen.PrimaryScreen : Screen.FromHandle(games[0].Handle);
                 switcher.ShowOnScreen(screen);
             }
             catch { switcher.Hide(); }
+        }
+
+        private void ConfigureClientHotkeys()
+        {
+            List<GameWindow> liveGames;
+            try { liveGames = ApplyPreferredOrder(Native.FindGames()); }
+            catch (Exception ex)
+            {
+                statusLabel.Text = "读取客户端失败：" + ex.Message;
+                return;
+            }
+            if (liveGames.Count == 0 && clientHotkeys.Count == 0)
+            {
+                MessageBox.Show(this, "请先刷新并发现客户端，再设置快捷键。",
+                    "客户端快捷键", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            using (HotkeySettingsDialog dialog = new HotkeySettingsDialog(liveGames, clientHotkeys))
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                clientHotkeys.Clear();
+                foreach (ClientHotkeyBinding binding in dialog.Bindings)
+                    if (binding != null) clientHotkeys.Add(binding.Clone());
+                int failed = RegisterClientHotkeys();
+                SaveSettings();
+                RefreshWindows();
+                statusLabel.Text = failed == 0
+                    ? "客户端快捷键已保存。"
+                    : "快捷键已保存，但有 " + failed + " 个组合键注册失败，可能已被其他程序占用。";
+                if (failed > 0)
+                {
+                    MessageBox.Show(this,
+                        "以下快捷键已被其他程序占用或被系统保留，请换用其他组合键：\n\n" +
+                        string.Join("\n", hotkeyFailures),
+                        "客户端快捷键", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+        }
+
+        private int RegisterClientHotkeys()
+        {
+            UnregisterClientHotkeys();
+            hotkeyFailures.Clear();
+            if (!controlsReady || !IsHandleCreated || IsDisposed || Disposing) return 0;
+            int failed = 0;
+            int id = FirstHotkeyId;
+            foreach (ClientHotkeyBinding binding in clientHotkeys)
+            {
+                if (binding == null || !binding.IsValid) continue;
+                const uint MOD_NOREPEAT = 0x4000;
+                if (Native.RegisterHotKey(Handle, id, binding.Modifiers | MOD_NOREPEAT, binding.Key))
+                    registeredHotkeys.Add(id, binding.Clone());
+                else
+                {
+                    failed++;
+                    hotkeyFailures.Add(binding.Identity + "：" + binding.ShortcutText);
+                }
+                id++;
+            }
+            return failed;
+        }
+
+        private void UnregisterClientHotkeys()
+        {
+            if (registeredHotkeys == null) return;
+            if (IsHandleCreated)
+            {
+                foreach (int id in registeredHotkeys.Keys.ToList())
+                {
+                    try { Native.UnregisterHotKey(Handle, id); }
+                    catch { }
+                }
+            }
+            registeredHotkeys.Clear();
+        }
+
+        private void ActivateClientByIdentity(string identity)
+        {
+            if (string.IsNullOrWhiteSpace(identity)) return;
+            try
+            {
+                // Read live identities: login names and window handles may have changed.
+                // Discovery only keeps a hotkey press from rebuilding the layout.
+                List<GameWindow> matches = Native.FindGames().Where(candidate =>
+                    PositionStore.MatchesIdentity(identity, candidate)).ToList();
+                if (matches.Count == 1)
+                {
+                    ActivateGame(matches[0].Handle);
+                    return;
+                }
+                statusLabel.Text = matches.Count == 0
+                    ? "快捷键对应的角色尚未登录：" + identity
+                    : "多个客户端使用相同角色名，请通过悬浮窗选择：" + identity;
+            }
+            catch (Exception ex)
+            {
+                statusLabel.Text = "快捷键切换失败：" + ex.Message;
+            }
+        }
+
+        private string HotkeyTextFor(GameWindow game)
+        {
+            ClientHotkeyBinding binding = clientHotkeys.FirstOrDefault(candidate =>
+                PositionStore.MatchesIdentity(candidate.Identity, game));
+            return binding == null ? "" : binding.ShortcutText;
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            if (controlsReady) RegisterClientHotkeys();
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            if (hotkeyFailures.Count > 0)
+                statusLabel.Text = "快捷键注册失败，请在设置中更换组合键：" + string.Join("；", hotkeyFailures);
+        }
+
+        protected override void OnHandleDestroyed(EventArgs e)
+        {
+            UnregisterClientHotkeys();
+            base.OnHandleDestroyed(e);
+        }
+
+        protected override void WndProc(ref Message message)
+        {
+            const int WM_HOTKEY = 0x0312;
+            if (message.Msg == WM_HOTKEY && controlsReady && !IsDisposed && !Disposing)
+            {
+                int id = message.WParam.ToInt32();
+                ClientHotkeyBinding binding;
+                if (registeredHotkeys.TryGetValue(id, out binding))
+                {
+                    ActivateClientByIdentity(binding.Identity);
+                    return;
+                }
+            }
+            base.WndProc(ref message);
         }
 
         private void ActivateGame(IntPtr handle)
@@ -823,7 +997,7 @@ namespace MoliWindowTiler
                     RefreshWindows();
                     return;
                 }
-                Native.ShowWindowAsync(handle, 9); // SW_RESTORE
+                if (Native.IsIconic(handle)) Native.ShowWindowAsync(handle, 9); // SW_RESTORE
                 Native.BringWindowToTop(handle);
                 Native.SetForegroundWindow(handle);
             }

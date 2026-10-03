@@ -19,6 +19,7 @@ namespace MoliWindowTiler
         [DataMember(Name = "hasSelection", Order = 8)] public bool HasSelection;
         [DataMember(Name = "selectedCharacters", Order = 9)] public List<string> SelectedCharacters;
         [DataMember(Name = "clientOrder", Order = 10)] public List<string> ClientOrder;
+        [DataMember(Name = "clientHotkeys", Order = 11)] public List<ClientHotkeyBinding> ClientHotkeys;
     }
 
     internal sealed class SettingsStore
@@ -61,7 +62,8 @@ namespace MoliWindowTiler
                 ShowSwitcher = true,
                 HasSelection = false,
                 SelectedCharacters = new List<string>(),
-                ClientOrder = new List<string>()
+                ClientOrder = new List<string>(),
+                ClientHotkeys = new List<ClientHotkeyBinding>()
             };
         }
 

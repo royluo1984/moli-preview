@@ -81,7 +81,7 @@ namespace MoliWindowTiler
             }
         }
 
-        public void SetWindows(IList<GameWindow> games)
+        public void SetWindows(IList<GameWindow> games, Func<GameWindow, string> hotkeyText = null)
         {
             buttons.SuspendLayout();
             try
@@ -111,7 +111,10 @@ namespace MoliWindowTiler
                     string thread = string.IsNullOrWhiteSpace(game.ThreadDescription)
                         ? game.ThreadId.ToString()
                         : game.ThreadId + " / " + game.ThreadDescription.Trim();
-                    tip.SetToolTip(button, game.CharacterName + "  (线程 " + thread + ")");
+                    string shortcut = hotkeyText == null ? "" : hotkeyText(game);
+                    tip.SetToolTip(button, game.CharacterName + "  (线程 " + thread + ")" +
+                        (string.IsNullOrEmpty(shortcut) ? "" : "\n快捷键：" + shortcut));
+                    button.Disposed += delegate { tip.Dispose(); };
                     button.Click += delegate(object sender, EventArgs args)
                     {
                         if (ignoreNextClick)

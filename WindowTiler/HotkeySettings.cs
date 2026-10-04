@@ -7,6 +7,44 @@ using System.Windows.Forms;
 
 namespace MoliWindowTiler
 {
+    internal static class HotkeyDefaults
+    {
+        internal const uint ModAlt = 0x0001;
+        internal const uint ModControl = 0x0002;
+        internal const uint ModShift = 0x0004;
+        internal const uint ModWindows = 0x0008;
+        internal const uint MinimizeAllModifiers = ModControl | ModAlt;
+        internal const uint MinimizeAllKey = (uint)Keys.Oem3;
+    }
+
+    internal static class HotkeyFormatter
+    {
+        internal static bool IsValid(uint modifiers, uint key)
+        {
+            return modifiers > 0 && (modifiers & ~0x000Fu) == 0 && key > 0 && key < 256 &&
+                key != (uint)Keys.ShiftKey && key != (uint)Keys.ControlKey && key != (uint)Keys.Menu;
+        }
+
+        internal static string Format(uint modifiers, uint key)
+        {
+            if (key == 0) return "未设置";
+            List<string> parts = new List<string>();
+            if ((modifiers & HotkeyDefaults.ModControl) != 0) parts.Add("Ctrl");
+            if ((modifiers & HotkeyDefaults.ModAlt) != 0) parts.Add("Alt");
+            if ((modifiers & HotkeyDefaults.ModShift) != 0) parts.Add("Shift");
+            if ((modifiers & HotkeyDefaults.ModWindows) != 0) parts.Add("Win");
+            if (key == (uint)Keys.Oem3)
+                parts.Add("`");
+            else if (key >= (uint)Keys.D0 && key <= (uint)Keys.D9)
+                parts.Add((key - (uint)Keys.D0).ToString());
+            else if (key >= (uint)Keys.NumPad0 && key <= (uint)Keys.NumPad9)
+                parts.Add("Num" + (key - (uint)Keys.NumPad0));
+            else
+                parts.Add(((Keys)key).ToString());
+            return string.Join("+", parts);
+        }
+    }
+
     [DataContract]
     internal sealed class ClientHotkeyBinding
     {
@@ -19,9 +57,7 @@ namespace MoliWindowTiler
             get
             {
                 return !string.IsNullOrWhiteSpace(Identity) && Modifiers > 0 &&
-                    (Modifiers & ~0x000Fu) == 0 && Key > 0 && Key < 256 &&
-                    Key != (uint)Keys.ShiftKey &&
-                    Key != (uint)Keys.ControlKey && Key != (uint)Keys.Menu;
+                    HotkeyFormatter.IsValid(Modifiers, Key);
             }
         }
 
@@ -29,18 +65,7 @@ namespace MoliWindowTiler
         {
             get
             {
-                List<string> parts = new List<string>();
-                if ((Modifiers & 2) != 0) parts.Add("Ctrl");
-                if ((Modifiers & 1) != 0) parts.Add("Alt");
-                if ((Modifiers & 4) != 0) parts.Add("Shift");
-                if ((Modifiers & 8) != 0) parts.Add("Win");
-                if (Key >= (uint)Keys.D0 && Key <= (uint)Keys.D9)
-                    parts.Add((Key - (uint)Keys.D0).ToString());
-                else if (Key >= (uint)Keys.NumPad0 && Key <= (uint)Keys.NumPad9)
-                    parts.Add("Num" + (Key - (uint)Keys.NumPad0));
-                else
-                    parts.Add(((Keys)Key).ToString());
-                return string.Join("+", parts);
+                return HotkeyFormatter.Format(Modifiers, Key);
             }
         }
 
@@ -101,10 +126,10 @@ namespace MoliWindowTiler
             }
         }
 
-        private const uint ModAlt = 0x0001;
-        private const uint ModControl = 0x0002;
-        private const uint ModShift = 0x0004;
-        private const uint ModWindows = 0x0008;
+        private const uint ModAlt = HotkeyDefaults.ModAlt;
+        private const uint ModControl = HotkeyDefaults.ModControl;
+        private const uint ModShift = HotkeyDefaults.ModShift;
+        private const uint ModWindows = HotkeyDefaults.ModWindows;
         private readonly List<HotkeyRow> rows = new List<HotkeyRow>();
         private readonly List<GameWindow> games;
         private readonly List<ClientHotkeyBinding> existing;
@@ -281,7 +306,7 @@ namespace MoliWindowTiler
             rows.Add(new HotkeyRow(identity, modifierBox, keyBox, online));
         }
 
-        private static IEnumerable<HotkeyModifierChoice> ModifierChoices()
+        internal static IEnumerable<HotkeyModifierChoice> ModifierChoices()
         {
             return new[]
             {
@@ -303,7 +328,7 @@ namespace MoliWindowTiler
             };
         }
 
-        private static IEnumerable<HotkeyKeyChoice> KeyChoices()
+        internal static IEnumerable<HotkeyKeyChoice> KeyChoices()
         {
             List<HotkeyKeyChoice> result = new List<HotkeyKeyChoice>
             {
@@ -323,6 +348,7 @@ namespace MoliWindowTiler
                 Keys key = (Keys)((int)Keys.F1 + i - 1);
                 result.Add(new HotkeyKeyChoice("F" + i, key));
             }
+            result.Add(new HotkeyKeyChoice("`", Keys.Oem3));
             result.Add(new HotkeyKeyChoice("Tab", Keys.Tab));
             result.Add(new HotkeyKeyChoice("Space", Keys.Space));
             result.Add(new HotkeyKeyChoice("PageUp", Keys.PageUp));
@@ -334,7 +360,7 @@ namespace MoliWindowTiler
             return result;
         }
 
-        private static void SelectModifier(ComboBox box, uint value)
+        internal static void SelectModifier(ComboBox box, uint value)
         {
             for (int i = 0; i < box.Items.Count; i++)
             {
@@ -348,7 +374,7 @@ namespace MoliWindowTiler
             box.SelectedIndex = 0;
         }
 
-        private static void SelectKey(ComboBox box, Keys value)
+        internal static void SelectKey(ComboBox box, Keys value)
         {
             for (int i = 0; i < box.Items.Count; i++)
             {
@@ -421,6 +447,146 @@ namespace MoliWindowTiler
             }
             Bindings = next;
             return true;
+        }
+    }
+
+    internal sealed class GlobalHotkeySettingsDialog : Form
+    {
+        private readonly ComboBox modifierBox = new ComboBox();
+        private readonly ComboBox keyBox = new ComboBox();
+        private readonly Label previewLabel = new Label();
+        private readonly uint initialModifiers;
+        private readonly uint initialKey;
+
+        public uint Modifiers { get; private set; }
+        public uint Key { get; private set; }
+
+        public GlobalHotkeySettingsDialog(uint modifiers, uint key)
+        {
+            Modifiers = modifiers;
+            Key = key;
+            initialModifiers = modifiers;
+            initialKey = key;
+            Text = "全部最小化快捷键";
+            StartPosition = FormStartPosition.CenterParent;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ShowInTaskbar = false;
+            AutoScaleMode = AutoScaleMode.Font;
+            ClientSize = new Size(430, 190);
+            BuildControls();
+        }
+
+        private void BuildControls()
+        {
+            TableLayoutPanel root = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                RowCount = 5,
+                Padding = new Padding(12)
+            };
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+            Controls.Add(root);
+
+            Label description = new Label
+            {
+                Text = "按下组合键即可最小化所有已发现的游戏客户端。",
+                Dock = DockStyle.Fill,
+                AutoEllipsis = true,
+                TextAlign = ContentAlignment.MiddleLeft
+            };
+            root.Controls.Add(description, 0, 0);
+            root.SetColumnSpan(description, 2);
+
+            root.Controls.Add(new Label
+            {
+                Text = "组合键",
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleLeft
+            }, 0, 1);
+            modifierBox.DropDownStyle = ComboBoxStyle.DropDownList;
+            modifierBox.Dock = DockStyle.Fill;
+            modifierBox.Margin = new Padding(3, 5, 3, 5);
+            foreach (HotkeyModifierChoice choice in HotkeySettingsDialog.ModifierChoices())
+                modifierBox.Items.Add(choice);
+            root.Controls.Add(modifierBox, 1, 1);
+
+            root.Controls.Add(new Label
+            {
+                Text = "按键",
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleLeft
+            }, 0, 2);
+            keyBox.DropDownStyle = ComboBoxStyle.DropDownList;
+            keyBox.Dock = DockStyle.Fill;
+            keyBox.Margin = new Padding(3, 2, 3, 2);
+            foreach (HotkeyKeyChoice choice in HotkeySettingsDialog.KeyChoices())
+                keyBox.Items.Add(choice);
+            root.Controls.Add(keyBox, 1, 2);
+
+            previewLabel.Dock = DockStyle.Fill;
+            previewLabel.ForeColor = Color.FromArgb(70, 78, 90);
+            previewLabel.TextAlign = ContentAlignment.MiddleLeft;
+            root.Controls.Add(previewLabel, 0, 3);
+            root.SetColumnSpan(previewLabel, 2);
+
+            FlowLayoutPanel actions = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.RightToLeft,
+                WrapContents = false
+            };
+            root.Controls.Add(actions, 0, 4);
+            Button okButton = new Button { Text = "保存", Width = 76, Height = 28 };
+            okButton.Click += delegate { SaveAndClose(); };
+            Button cancelButton = new Button { Text = "取消", Width = 76, Height = 28, DialogResult = DialogResult.Cancel };
+            Button defaultButton = new Button { Text = "恢复默认", Width = 82, Height = 28 };
+            defaultButton.Click += delegate
+            {
+                HotkeySettingsDialog.SelectModifier(modifierBox, HotkeyDefaults.MinimizeAllModifiers);
+                HotkeySettingsDialog.SelectKey(keyBox, (Keys)HotkeyDefaults.MinimizeAllKey);
+                UpdatePreview();
+            };
+            actions.Controls.Add(cancelButton);
+            actions.Controls.Add(okButton);
+            actions.Controls.Add(defaultButton);
+            AcceptButton = okButton;
+            CancelButton = cancelButton;
+
+            modifierBox.SelectedIndexChanged += delegate { UpdatePreview(); };
+            keyBox.SelectedIndexChanged += delegate { UpdatePreview(); };
+            HotkeySettingsDialog.SelectModifier(modifierBox, initialModifiers);
+            HotkeySettingsDialog.SelectKey(keyBox, initialKey == 0 ? Keys.None : (Keys)initialKey);
+            UpdatePreview();
+        }
+
+        private void UpdatePreview()
+        {
+            HotkeyModifierChoice modifier = modifierBox.SelectedItem as HotkeyModifierChoice;
+            HotkeyKeyChoice key = keyBox.SelectedItem as HotkeyKeyChoice;
+            uint modifierValue = modifier == null ? 0 : modifier.Value;
+            uint keyValue = key == null ? 0 : (uint)key.Value;
+            previewLabel.Text = "当前设置：" + HotkeyFormatter.Format(modifierValue, keyValue) +
+                (keyValue == 0 ? "（已停用）" : "");
+        }
+
+        private void SaveAndClose()
+        {
+            HotkeyModifierChoice modifier = modifierBox.SelectedItem as HotkeyModifierChoice;
+            HotkeyKeyChoice key = keyBox.SelectedItem as HotkeyKeyChoice;
+            if (modifier == null || key == null) return;
+            Modifiers = key.Value == Keys.None ? 0 : modifier.Value;
+            Key = key.Value == Keys.None ? 0 : (uint)key.Value;
+            DialogResult = DialogResult.OK;
+            Close();
         }
     }
 }

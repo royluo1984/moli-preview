@@ -21,6 +21,8 @@ namespace MoliWindowTiler
         [DataMember(Name = "clientOrder", Order = 10)] public List<string> ClientOrder;
         [DataMember(Name = "clientHotkeys", Order = 11)] public List<ClientHotkeyBinding> ClientHotkeys;
         [DataMember(Name = "minimizeToTray", Order = 12)] public bool MinimizeToTray = true;
+        [DataMember(Name = "minimizeAllModifiers", Order = 13)] public uint MinimizeAllModifiers = HotkeyDefaults.MinimizeAllModifiers;
+        [DataMember(Name = "minimizeAllKey", Order = 14)] public uint MinimizeAllKey = HotkeyDefaults.MinimizeAllKey;
     }
 
     internal sealed class SettingsStore
@@ -39,12 +41,16 @@ namespace MoliWindowTiler
                 if (!File.Exists(FilePath)) return Defaults();
                 string json = File.ReadAllText(FilePath);
                 bool hasTraySetting = json.IndexOf("\"minimizeToTray\"", StringComparison.OrdinalIgnoreCase) >= 0;
+                bool hasMinimizeAllModifiers = json.IndexOf("\"minimizeAllModifiers\"", StringComparison.OrdinalIgnoreCase) >= 0;
+                bool hasMinimizeAllKey = json.IndexOf("\"minimizeAllKey\"", StringComparison.OrdinalIgnoreCase) >= 0;
                 DataContractJsonSerializer serializer = new DataContractJsonSerializer(typeof(AppSettings));
                 using (MemoryStream stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json)))
                 {
                     AppSettings settings = serializer.ReadObject(stream) as AppSettings;
                     if (settings == null) return Defaults();
                     if (!hasTraySetting) settings.MinimizeToTray = true;
+                    if (!hasMinimizeAllModifiers) settings.MinimizeAllModifiers = HotkeyDefaults.MinimizeAllModifiers;
+                    if (!hasMinimizeAllKey) settings.MinimizeAllKey = HotkeyDefaults.MinimizeAllKey;
                     return settings;
                 }
             }
@@ -69,7 +75,9 @@ namespace MoliWindowTiler
                 SelectedCharacters = new List<string>(),
                 ClientOrder = new List<string>(),
                 ClientHotkeys = new List<ClientHotkeyBinding>(),
-                MinimizeToTray = true
+                MinimizeToTray = true,
+                MinimizeAllModifiers = HotkeyDefaults.MinimizeAllModifiers,
+                MinimizeAllKey = HotkeyDefaults.MinimizeAllKey
             };
         }
 

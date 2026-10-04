@@ -147,6 +147,7 @@ namespace MoliWindowTiler
         private readonly Button restoreButton = new Button();
         private readonly Button closeAllButton = new Button();
         private readonly Button hotkeyButton = new Button();
+        private readonly Button minimizeHotkeyButton = new Button();
         private readonly PreviewPanel preview = new PreviewPanel();
         private readonly Dictionary<string, WindowSnapshot> snapshots = new Dictionary<string, WindowSnapshot>();
         private readonly PositionStore positionStore;
@@ -169,6 +170,10 @@ namespace MoliWindowTiler
             new Dictionary<int, ClientHotkeyBinding>();
         private readonly List<string> hotkeyFailures = new List<string>();
         private const int FirstHotkeyId = 0x5200;
+        private const int MinimizeAllHotkeyId = 0x51FF;
+        private uint minimizeAllModifiers = HotkeyDefaults.MinimizeAllModifiers;
+        private uint minimizeAllKey = HotkeyDefaults.MinimizeAllKey;
+        private bool minimizeAllHotkeyRegistered;
         private readonly NotifyIcon trayIcon = new NotifyIcon();
         private ContextMenuStrip trayMenu;
         private bool exiting;
@@ -333,6 +338,12 @@ namespace MoliWindowTiler
             hotkeyButton.Margin = new Padding(2, 2, 3, 0);
             hotkeyButton.Click += delegate { ConfigureClientHotkeys(); };
             features.Controls.Add(hotkeyButton);
+            minimizeHotkeyButton.Width = 190;
+            minimizeHotkeyButton.Height = 27;
+            minimizeHotkeyButton.Margin = new Padding(2, 2, 3, 0);
+            minimizeHotkeyButton.Click += delegate { ConfigureMinimizeAllHotkey(); };
+            features.Controls.Add(minimizeHotkeyButton);
+            UpdateMinimizeHotkeyButtonText();
 
             TableLayoutPanel body = new TableLayoutPanel
             {
@@ -577,6 +588,7 @@ namespace MoliWindowTiler
                 marginBox.Value = Math.Max(marginBox.Minimum, Math.Min(marginBox.Maximum, settings.Margin));
                 switcherBox.Checked = settings.ShowSwitcher;
                 trayBox.Checked = settings.MinimizeToTray;
+                ApplyMinimizeAllHotkey(settings.MinimizeAllModifiers, settings.MinimizeAllKey);
                 preferredMonitor = settings.Monitor ?? "";
                 hasSavedSelection = settings.HasSelection;
                 preferredCharacters.Clear();
@@ -651,6 +663,8 @@ namespace MoliWindowTiler
                     Monitor = preferredMonitor ?? "",
                     ShowSwitcher = switcherBox.Checked,
                     MinimizeToTray = trayBox.Checked,
+                    MinimizeAllModifiers = minimizeAllModifiers,
+                    MinimizeAllKey = minimizeAllKey,
                     HasSelection = hasSavedSelection,
                     SelectedCharacters = preferredCharacters.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList(),
                     ClientOrder = preferredOrder.ToList(),
@@ -1029,6 +1043,78 @@ namespace MoliWindowTiler
             catch { switcher.Hide(); }
         }
 
+        private void ApplyMinimizeAllHotkey(uint modifiers, uint key)
+        {
+            if (key == 0)
+            {
+                minimizeAllModifiers = 0;
+                minimizeAllKey = 0;
+            }
+            else if (HotkeyFormatter.IsValid(modifiers, key))
+            {
+                minimizeAllModifiers = modifiers;
+                minimizeAllKey = key;
+            }
+            else
+            {
+                minimizeAllModifiers = HotkeyDefaults.MinimizeAllModifiers;
+                minimizeAllKey = HotkeyDefaults.MinimizeAllKey;
+            }
+            UpdateMinimizeHotkeyButtonText();
+        }
+
+        private void UpdateMinimizeHotkeyButtonText()
+        {
+            if (minimizeHotkeyButton == null || minimizeHotkeyButton.IsDisposed) return;
+            minimizeHotkeyButton.Text = "全部最小化：" +
+                HotkeyFormatter.Format(minimizeAllModifiers, minimizeAllKey);
+        }
+
+        private void ConfigureMinimizeAllHotkey()
+        {
+            using (GlobalHotkeySettingsDialog dialog =
+                new GlobalHotkeySettingsDialog(minimizeAllModifiers, minimizeAllKey))
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                ApplyMinimizeAllHotkey(dialog.Modifiers, dialog.Key);
+                int failed = RegisterClientHotkeys();
+                SaveSettings();
+                statusLabel.Text = failed == 0
+                    ? "全部最小化快捷键已保存：" + HotkeyFormatter.Format(minimizeAllModifiers, minimizeAllKey)
+                    : "快捷键已保存，但有 " + failed + " 个组合键注册失败。";
+                if (failed > 0)
+                {
+                    MessageBox.Show(this,
+                        "以下快捷键已被其他程序占用或被系统保留，请换用其他组合键：\n\n" +
+                        string.Join("\n", hotkeyFailures),
+                        "快捷键设置", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+        }
+
+        private void MinimizeAllGames()
+        {
+            try
+            {
+                CaptureCurrentPositions();
+                List<GameWindow> found = Native.FindGames();
+                HashSet<IntPtr> handles = new HashSet<IntPtr>();
+                foreach (GameWindow game in found)
+                {
+                    if (game == null || !handles.Add(game.Handle) || !Native.IsWindow(game.Handle)) continue;
+                    Native.ShowWindowAsync(game.Handle, 6); // SW_MINIMIZE
+                }
+                if (switcher != null && !switcher.IsDisposed) switcher.Hide();
+                statusLabel.Text = found.Count == 0
+                    ? "当前没有发现游戏客户端。"
+                    : "已最小化 " + handles.Count + " 个游戏客户端。";
+            }
+            catch (Exception ex)
+            {
+                statusLabel.Text = "最小化游戏窗口失败：" + ex.Message;
+            }
+        }
+
         private void ConfigureClientHotkeys()
         {
             List<GameWindow> liveGames;
@@ -1073,6 +1159,19 @@ namespace MoliWindowTiler
             hotkeyFailures.Clear();
             if (!controlsReady || !IsHandleCreated || IsDisposed || Disposing) return 0;
             int failed = 0;
+            if (HotkeyFormatter.IsValid(minimizeAllModifiers, minimizeAllKey))
+            {
+                const uint MOD_NOREPEAT = 0x4000;
+                if (Native.RegisterHotKey(Handle, MinimizeAllHotkeyId,
+                    minimizeAllModifiers | MOD_NOREPEAT, minimizeAllKey))
+                    minimizeAllHotkeyRegistered = true;
+                else
+                {
+                    failed++;
+                    hotkeyFailures.Add("全部最小化：" +
+                        HotkeyFormatter.Format(minimizeAllModifiers, minimizeAllKey));
+                }
+            }
             int id = FirstHotkeyId;
             foreach (ClientHotkeyBinding binding in clientHotkeys)
             {
@@ -1095,6 +1194,12 @@ namespace MoliWindowTiler
             if (registeredHotkeys == null) return;
             if (IsHandleCreated)
             {
+                if (minimizeAllHotkeyRegistered)
+                {
+                    try { Native.UnregisterHotKey(Handle, MinimizeAllHotkeyId); }
+                    catch { }
+                    minimizeAllHotkeyRegistered = false;
+                }
                 foreach (int id in registeredHotkeys.Keys.ToList())
                 {
                     try { Native.UnregisterHotKey(Handle, id); }
@@ -1160,6 +1265,11 @@ namespace MoliWindowTiler
             if (message.Msg == WM_HOTKEY && controlsReady && !IsDisposed && !Disposing)
             {
                 int id = message.WParam.ToInt32();
+                if (id == MinimizeAllHotkeyId && minimizeAllHotkeyRegistered)
+                {
+                    MinimizeAllGames();
+                    return;
+                }
                 ClientHotkeyBinding binding;
                 if (registeredHotkeys.TryGetValue(id, out binding))
                 {

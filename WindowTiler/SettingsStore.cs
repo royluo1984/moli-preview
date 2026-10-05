@@ -8,6 +8,30 @@ using System.Runtime.Serialization.Json;
 namespace MoliWindowTiler
 {
     [DataContract]
+    internal sealed class TargetProfileState
+    {
+        [DataMember(Name = "profileId", Order = 1)] public string ProfileId;
+        [DataMember(Name = "hasSelection", Order = 2)] public bool HasSelection;
+        [DataMember(Name = "selectedCharacters", Order = 3)] public List<string> SelectedCharacters;
+        [DataMember(Name = "clientOrder", Order = 4)] public List<string> ClientOrder;
+        [DataMember(Name = "clientHotkeys", Order = 5)] public List<ClientHotkeyBinding> ClientHotkeys;
+
+        internal TargetProfileState Clone()
+        {
+            return new TargetProfileState
+            {
+                ProfileId = ProfileId,
+                HasSelection = HasSelection,
+                SelectedCharacters = SelectedCharacters == null ? new List<string>() : new List<string>(SelectedCharacters),
+                ClientOrder = ClientOrder == null ? new List<string>() : new List<string>(ClientOrder),
+                ClientHotkeys = ClientHotkeys == null
+                    ? new List<ClientHotkeyBinding>()
+                    : ClientHotkeys.Where(binding => binding != null).Select(binding => binding.Clone()).ToList()
+            };
+        }
+    }
+
+    [DataContract]
     internal sealed class AppSettings
     {
         [DataMember(Name = "layoutMode", Order = 1)] public int LayoutMode;
@@ -26,6 +50,7 @@ namespace MoliWindowTiler
         [DataMember(Name = "minimizeAllKey", Order = 14)] public uint MinimizeAllKey = HotkeyDefaults.MinimizeAllKey;
         [DataMember(Name = "targetProfiles", Order = 15)] public List<TargetProfile> TargetProfiles;
         [DataMember(Name = "activeTargetProfileId", Order = 16)] public string ActiveTargetProfileId;
+        [DataMember(Name = "profileStates", Order = 17)] public List<TargetProfileState> ProfileStates;
     }
 
     internal sealed class SettingsStore
@@ -55,6 +80,7 @@ namespace MoliWindowTiler
                     if (!hasMinimizeAllModifiers) settings.MinimizeAllModifiers = HotkeyDefaults.MinimizeAllModifiers;
                     if (!hasMinimizeAllKey) settings.MinimizeAllKey = HotkeyDefaults.MinimizeAllKey;
                     EnsureTargetProfiles(settings);
+                    EnsureProfileStates(settings);
                     return settings;
                 }
             }
@@ -83,7 +109,17 @@ namespace MoliWindowTiler
                 MinimizeAllModifiers = HotkeyDefaults.MinimizeAllModifiers,
                 MinimizeAllKey = HotkeyDefaults.MinimizeAllKey,
                 TargetProfiles = new List<TargetProfile> { TargetProfile.CreateMoliDefault() },
-                ActiveTargetProfileId = TargetProfile.MoliDefaultId
+                ActiveTargetProfileId = TargetProfile.MoliDefaultId,
+                ProfileStates = new List<TargetProfileState>
+                {
+                    new TargetProfileState
+                    {
+                        ProfileId = TargetProfile.MoliDefaultId,
+                        SelectedCharacters = new List<string>(),
+                        ClientOrder = new List<string>(),
+                        ClientHotkeys = new List<ClientHotkeyBinding>()
+                    }
+                }
             };
         }
 
@@ -108,6 +144,44 @@ namespace MoliWindowTiler
             settings.TargetProfiles = profiles;
             if (!profiles.Any(profile => string.Equals(profile.Id, settings.ActiveTargetProfileId, StringComparison.OrdinalIgnoreCase)))
                 settings.ActiveTargetProfileId = TargetProfile.MoliDefaultId;
+        }
+
+        internal static void EnsureProfileStates(AppSettings settings)
+        {
+            if (settings == null) return;
+            EnsureTargetProfiles(settings);
+            List<TargetProfileState> states = new List<TargetProfileState>();
+            if (settings.ProfileStates != null)
+            {
+                foreach (TargetProfileState state in settings.ProfileStates)
+                {
+                    if (state == null || string.IsNullOrWhiteSpace(state.ProfileId)) continue;
+                    TargetProfile profile = settings.TargetProfiles.FirstOrDefault(candidate =>
+                        string.Equals(candidate.Id, state.ProfileId, StringComparison.OrdinalIgnoreCase));
+                    if (profile == null || states.Any(existing =>
+                        string.Equals(existing.ProfileId, state.ProfileId, StringComparison.OrdinalIgnoreCase))) continue;
+                    state.SelectedCharacters = state.SelectedCharacters ?? new List<string>();
+                    state.ClientOrder = state.ClientOrder ?? new List<string>();
+                    state.ClientHotkeys = state.ClientHotkeys ?? new List<ClientHotkeyBinding>();
+                    states.Add(state);
+                }
+            }
+            if (!states.Any(state => string.Equals(state.ProfileId, TargetProfile.MoliDefaultId, StringComparison.OrdinalIgnoreCase)))
+            {
+                states.Insert(0, new TargetProfileState
+                {
+                    ProfileId = TargetProfile.MoliDefaultId,
+                    HasSelection = settings.HasSelection,
+                    SelectedCharacters = settings.SelectedCharacters == null
+                        ? new List<string>() : new List<string>(settings.SelectedCharacters),
+                    ClientOrder = settings.ClientOrder == null
+                        ? new List<string>() : new List<string>(settings.ClientOrder),
+                    ClientHotkeys = settings.ClientHotkeys == null
+                        ? new List<ClientHotkeyBinding>()
+                        : settings.ClientHotkeys.Where(binding => binding != null).Select(binding => binding.Clone()).ToList()
+                });
+            }
+            settings.ProfileStates = states;
         }
 
         public void Save(AppSettings settings)

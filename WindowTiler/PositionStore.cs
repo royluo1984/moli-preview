@@ -26,6 +26,7 @@ namespace MoliWindowTiler
         [DataMember(Name = "started", Order = 11)] public long Started;
         [DataMember(Name = "threadDescription", Order = 12)] public string ThreadDescription;
         [DataMember(Name = "title", Order = 13)] public string Title;
+        [DataMember(Name = "profileId", Order = 14)] public string ProfileId;
 
         public Rectangle Bounds { get { return new Rectangle(Left, Top, Width, Height); } }
     }
@@ -55,7 +56,7 @@ namespace MoliWindowTiler
             string key = NameKey(character);
             if (key == null) return null;
             SavedWindowPosition value;
-            return positions.TryGetValue(key, out value) ? value : null;
+            return positions.TryGetValue(ScopedKey(TargetProfile.MoliDefaultId, key), out value) ? value : null;
         }
 
         public SavedWindowPosition Get(GameWindow game)
@@ -81,6 +82,7 @@ namespace MoliWindowTiler
             try { screen = Screen.FromHandle(game.Handle); }
             catch { }
             record.Character = identity;
+            record.ProfileId = ProfileIdFor(game);
             record.Left = bounds.Left;
             record.Top = bounds.Top;
             record.Width = bounds.Width;
@@ -104,7 +106,8 @@ namespace MoliWindowTiler
                 positions[key] = record;
             }
             record.Aliases = aliases;
-            positions[NameKey(record.Character)] = record;
+            string characterKey = NameKey(record.Character);
+            if (characterKey != null) positions[ScopedKey(record.ProfileId, characterKey)] = record;
         }
 
         public void Save()
@@ -143,7 +146,11 @@ namespace MoliWindowTiler
                     {
                         if (position != null && !string.IsNullOrWhiteSpace(position.Character) &&
                             position.Width > 0 && position.Height > 0)
+                        {
+                            if (string.IsNullOrWhiteSpace(position.ProfileId))
+                                position.ProfileId = TargetProfile.MoliDefaultId;
                             Index(position);
+                        }
                     }
                 }
             }
@@ -190,15 +197,16 @@ namespace MoliWindowTiler
 
         private void Index(SavedWindowPosition position)
         {
-            AddIndex(NameKey(position.Character), position);
+            string profileId = ProfileIdFor(position);
+            AddIndex(ScopedKey(profileId, NameKey(position.Character)), position);
             if (position.Aliases != null)
             {
                 foreach (string alias in position.Aliases)
-                    AddIndex(NameKey(alias), position);
+                    AddIndex(ScopedKey(profileId, NameKey(alias)), position);
             }
-            if (position.ThreadId != 0) AddIndex(ThreadKey(position.ThreadId), position);
+            if (position.ThreadId != 0) AddIndex(ScopedKey(profileId, ThreadKey(position.ThreadId)), position);
             if (position.ProcessId != 0 && position.Started != 0)
-                AddIndex(ProcessKey(position.ProcessId, position.Started), position);
+                AddIndex(ScopedKey(profileId, ProcessKey(position.ProcessId, position.Started)), position);
         }
 
         private void AddIndex(string key, SavedWindowPosition position)
@@ -218,23 +226,45 @@ namespace MoliWindowTiler
         private static IEnumerable<string> CandidateKeys(GameWindow game)
         {
             List<string> keys = new List<string>();
+            string profileId = ProfileIdFor(game);
             foreach (string candidate in Native.CharacterCandidates(game))
             {
                 if (IsAnonymous(candidate)) continue;
                 string key = NameKey(candidate);
+                key = ScopedKey(profileId, key);
                 if (key != null && !keys.Any(existing => string.Equals(existing, key, StringComparison.OrdinalIgnoreCase))) keys.Add(key);
             }
             string threadKey = ThreadKey(game.ThreadId);
-            if (threadKey != null) keys.Add(threadKey);
+            if (threadKey != null) keys.Add(ScopedKey(profileId, threadKey));
             string processKey = ProcessKey(game.Pid, game.Started);
-            if (processKey != null) keys.Add(processKey);
+            if (processKey != null) keys.Add(ScopedKey(profileId, processKey));
             return keys;
         }
 
         private static string AliasFromKey(string key)
         {
+            int separator = key == null ? -1 : key.IndexOf('|');
+            if (separator >= 0) key = key.Substring(separator + 1);
             if (key == null || !key.StartsWith("name:", StringComparison.OrdinalIgnoreCase)) return null;
             return key.Substring(5);
+        }
+
+        private static string ProfileIdFor(GameWindow game)
+        {
+            return game == null || string.IsNullOrWhiteSpace(game.TargetProfileId)
+                ? TargetProfile.MoliDefaultId : game.TargetProfileId.Trim();
+        }
+
+        private static string ProfileIdFor(SavedWindowPosition position)
+        {
+            return position == null || string.IsNullOrWhiteSpace(position.ProfileId)
+                ? TargetProfile.MoliDefaultId : position.ProfileId.Trim();
+        }
+
+        private static string ScopedKey(string profileId, string key)
+        {
+            if (string.IsNullOrWhiteSpace(key)) return null;
+            return "profile:" + (string.IsNullOrWhiteSpace(profileId) ? TargetProfile.MoliDefaultId : profileId.Trim()) + "|" + key;
         }
 
         private static string NameKey(string value)

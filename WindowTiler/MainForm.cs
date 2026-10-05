@@ -169,6 +169,7 @@ namespace MoliWindowTiler
         private readonly List<string> preferredOrder = new List<string>();
         private readonly List<ClientHotkeyBinding> clientHotkeys = new List<ClientHotkeyBinding>();
         private readonly List<TargetProfile> targetProfiles = new List<TargetProfile>();
+        private readonly List<TargetProfileState> profileStates = new List<TargetProfileState>();
         private string activeTargetProfileId = TargetProfile.MoliDefaultId;
         private readonly Dictionary<int, ClientHotkeyBinding> registeredHotkeys =
             new Dictionary<int, ClientHotkeyBinding>();
@@ -648,16 +649,80 @@ namespace MoliWindowTiler
             finally { targetProfileBox.EndUpdate(); }
         }
 
+        private TargetProfileState ProfileState(string profileId, bool create)
+        {
+            if (string.IsNullOrWhiteSpace(profileId)) profileId = TargetProfile.MoliDefaultId;
+            TargetProfileState state = profileStates.FirstOrDefault(candidate =>
+                string.Equals(candidate.ProfileId, profileId, StringComparison.OrdinalIgnoreCase));
+            if (state == null && create)
+            {
+                state = new TargetProfileState
+                {
+                    ProfileId = profileId,
+                    SelectedCharacters = new List<string>(),
+                    ClientOrder = new List<string>(),
+                    ClientHotkeys = new List<ClientHotkeyBinding>()
+                };
+                profileStates.Add(state);
+            }
+            return state;
+        }
+
+        private void LoadProfileState(string profileId)
+        {
+            preferredCharacters.Clear();
+            preferredOrder.Clear();
+            clientHotkeys.Clear();
+            hasSavedSelection = false;
+            TargetProfileState state = ProfileState(profileId, false);
+            if (state == null) return;
+            hasSavedSelection = state.HasSelection;
+            if (state.SelectedCharacters != null)
+            {
+                foreach (string character in state.SelectedCharacters)
+                    if (!string.IsNullOrWhiteSpace(character)) preferredCharacters.Add(character.Trim());
+            }
+            if (state.ClientOrder != null)
+            {
+                foreach (string identity in state.ClientOrder)
+                    if (!string.IsNullOrWhiteSpace(identity) &&
+                        !preferredOrder.Any(existing => string.Equals(existing, identity.Trim(), StringComparison.OrdinalIgnoreCase)))
+                        preferredOrder.Add(identity.Trim());
+            }
+            if (state.ClientHotkeys != null)
+            {
+                foreach (ClientHotkeyBinding binding in state.ClientHotkeys)
+                {
+                    if (binding == null || !binding.IsValid || string.IsNullOrWhiteSpace(binding.Identity)) continue;
+                    if (clientHotkeys.Any(existing => string.Equals(existing.Identity, binding.Identity.Trim(), StringComparison.OrdinalIgnoreCase))) continue;
+                    ClientHotkeyBinding copy = binding.Clone();
+                    copy.Identity = copy.Identity.Trim();
+                    clientHotkeys.Add(copy);
+                }
+            }
+        }
+
+        private void CaptureCurrentProfileState()
+        {
+            TargetProfileState state = ProfileState(activeTargetProfileId, true);
+            state.HasSelection = hasSavedSelection;
+            state.SelectedCharacters = preferredCharacters.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
+            state.ClientOrder = preferredOrder.ToList();
+            state.ClientHotkeys = clientHotkeys.Select(binding => binding.Clone()).ToList();
+        }
+
         private void TargetProfileSelectionChanged()
         {
             if (!controlsReady || applyingSettings) return;
             TargetProfile selected = targetProfileBox.SelectedItem as TargetProfile;
             if (selected == null || string.Equals(selected.Id, activeTargetProfileId, StringComparison.OrdinalIgnoreCase)) return;
             CaptureCurrentPositions();
+            CaptureCurrentProfileState();
             activeTargetProfileId = selected.Id;
-            SaveSettings();
+            LoadProfileState(activeTargetProfileId);
             RegisterClientHotkeys();
             RefreshWindows();
+            SaveSettings();
         }
 
         private void ManageTargetProfiles()
@@ -674,9 +739,10 @@ namespace MoliWindowTiler
                     string.Equals(profile.Id, previous, StringComparison.OrdinalIgnoreCase))
                     ? previous : TargetProfile.MoliDefaultId;
                 BindTargetProfileBox();
-                SaveSettings();
+                LoadProfileState(activeTargetProfileId);
                 RegisterClientHotkeys();
                 RefreshWindows();
+                SaveSettings();
             }
         }
 
@@ -687,7 +753,12 @@ namespace MoliWindowTiler
             try
             {
                 SettingsStore.EnsureTargetProfiles(settings);
+                SettingsStore.EnsureProfileStates(settings);
                 LoadTargetProfiles(settings.TargetProfiles, settings.ActiveTargetProfileId);
+                profileStates.Clear();
+                foreach (TargetProfileState state in settings.ProfileStates)
+                    if (state != null) profileStates.Add(state.Clone());
+                LoadProfileState(activeTargetProfileId);
                 columnsBox.SelectedIndex = settings.LayoutMode >= 0 && settings.LayoutMode < columnsBox.Items.Count
                     ? settings.LayoutMode : 0;
                 customRowsBox.Text = string.IsNullOrWhiteSpace(settings.CustomRows) ? "3,3" : settings.CustomRows;
@@ -699,36 +770,6 @@ namespace MoliWindowTiler
                 trayBox.Checked = settings.MinimizeToTray;
                 ApplyMinimizeAllHotkey(settings.MinimizeAllModifiers, settings.MinimizeAllKey);
                 preferredMonitor = settings.Monitor ?? "";
-                hasSavedSelection = settings.HasSelection;
-                preferredCharacters.Clear();
-                if (settings.SelectedCharacters != null)
-                {
-                    foreach (string character in settings.SelectedCharacters)
-                        if (!string.IsNullOrWhiteSpace(character)) preferredCharacters.Add(character.Trim());
-                }
-                preferredOrder.Clear();
-                if (settings.ClientOrder != null)
-                {
-                    foreach (string identity in settings.ClientOrder)
-                        if (!string.IsNullOrWhiteSpace(identity) &&
-                            !preferredOrder.Any(existing => string.Equals(existing, identity.Trim(), StringComparison.OrdinalIgnoreCase)))
-                            preferredOrder.Add(identity.Trim());
-                }
-                clientHotkeys.Clear();
-                if (settings.ClientHotkeys != null)
-                {
-                    foreach (ClientHotkeyBinding binding in settings.ClientHotkeys)
-                    {
-                        if (binding == null || !binding.IsValid) continue;
-                        if (!clientHotkeys.Any(existing =>
-                            string.Equals(existing.Identity, binding.Identity.Trim(), StringComparison.OrdinalIgnoreCase)))
-                        {
-                            ClientHotkeyBinding copy = binding.Clone();
-                            copy.Identity = copy.Identity.Trim();
-                            clientHotkeys.Add(copy);
-                        }
-                    }
-                }
                 customRowsBox.Enabled = columnsBox.SelectedIndex == 5;
             }
             finally
@@ -762,6 +803,7 @@ namespace MoliWindowTiler
                     }
                     hasSavedSelection = true;
                 }
+                CaptureCurrentProfileState();
                 settingsStore.Save(new AppSettings
                 {
                     LayoutMode = columnsBox.SelectedIndex < 0 ? 0 : columnsBox.SelectedIndex,
@@ -779,7 +821,8 @@ namespace MoliWindowTiler
                     ClientOrder = preferredOrder.ToList(),
                     ClientHotkeys = clientHotkeys.Select(binding => binding.Clone()).ToList(),
                     TargetProfiles = targetProfiles.Select(profile => profile.Clone()).ToList(),
-                    ActiveTargetProfileId = activeTargetProfileId
+                    ActiveTargetProfileId = activeTargetProfileId,
+                    ProfileStates = profileStates.Select(state => state.Clone()).ToList()
                 });
             }
             catch

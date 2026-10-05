@@ -46,6 +46,25 @@ namespace MoliWindowTiler
         public string Key { get { return Pid + ":" + Started + ":" + Handle.ToInt64(); } }
     }
 
+    internal sealed class WindowSample
+    {
+        public IntPtr Handle;
+        public int Pid;
+        public uint ThreadId;
+        public string ExecutableName;
+        public string ExecutablePath;
+        public string WindowClass;
+        public string Title;
+        public string ThreadDescription;
+
+        public override string ToString()
+        {
+            string title = string.IsNullOrWhiteSpace(Title) ? "（无标题）" : Title.Trim();
+            string executable = string.IsNullOrWhiteSpace(ExecutableName) ? "未知程序" : ExecutableName;
+            return title + "  [" + executable + "]  PID " + Pid;
+        }
+    }
+
     internal static class Native
     {
         internal delegate bool EnumProc(IntPtr hwnd, IntPtr value);
@@ -87,6 +106,50 @@ namespace MoliWindowTiler
             NativeRect rect;
             if (!IsWindow(hwnd) || !GetWindowRect(hwnd, out rect)) return Rectangle.Empty;
             return rect.Rectangle;
+        }
+
+        internal static List<WindowSample> FindWindowSamples()
+        {
+            List<WindowSample> samples = new List<WindowSample>();
+            EnumProc callback = delegate(IntPtr hwnd, IntPtr data)
+            {
+                if (!IsWindowVisible(hwnd) || GetWindow(hwnd, 4) != IntPtr.Zero) return true;
+                StringBuilder title = new StringBuilder(1024);
+                GetWindowText(hwnd, title, title.Capacity);
+                if (string.IsNullOrWhiteSpace(title.ToString())) return true;
+                StringBuilder className = new StringBuilder(256);
+                GetClassName(hwnd, className, className.Capacity);
+                uint pid;
+                uint threadId = GetWindowThreadProcessId(hwnd, out pid);
+                IntPtr process = OpenProcess(0x1000, false, pid);
+                if (process == IntPtr.Zero) return true;
+                string executablePath = "";
+                try
+                {
+                    StringBuilder path = new StringBuilder(32768);
+                    int length = path.Capacity;
+                    if (!QueryFullProcessImageName(process, 0, path, ref length)) return true;
+                    executablePath = path.ToString();
+                }
+                finally { CloseHandle(process); }
+                string executableName = Path.GetFileName(executablePath);
+                if (string.Equals(executableName, "MoliWindowTiler.exe", StringComparison.OrdinalIgnoreCase)) return true;
+                samples.Add(new WindowSample
+                {
+                    Handle = hwnd,
+                    Pid = (int)pid,
+                    ThreadId = threadId,
+                    ExecutableName = executableName,
+                    ExecutablePath = executablePath,
+                    WindowClass = className.ToString(),
+                    Title = title.ToString(),
+                    ThreadDescription = ReadThreadDescription(threadId)
+                });
+                return true;
+            };
+            if (!EnumWindows(callback, IntPtr.Zero)) throw new InvalidOperationException("读取窗口列表失败，请刷新重试。");
+            return samples.OrderBy(sample => sample.ExecutableName, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(sample => sample.Title, StringComparer.OrdinalIgnoreCase).ToList();
         }
 
         internal static GameWindow ReadWindow(IntPtr hwnd)

@@ -133,6 +133,7 @@ namespace MoliWindowTiler
         private readonly ComboBox monitorBox = new ComboBox();
         private readonly ComboBox columnsBox = new ComboBox();
         private readonly ComboBox alignmentBox = new ComboBox();
+        private readonly ComboBox targetProfileBox = new ComboBox();
         private readonly TextBox customRowsBox = new TextBox();
         private readonly CheckBox switcherBox = new CheckBox();
         private readonly CheckBox trayBox = new CheckBox();
@@ -148,6 +149,7 @@ namespace MoliWindowTiler
         private readonly Button closeAllButton = new Button();
         private readonly Button hotkeyButton = new Button();
         private readonly Button minimizeHotkeyButton = new Button();
+        private readonly Button manageProfilesButton = new Button();
         private readonly PreviewPanel preview = new PreviewPanel();
         private readonly Dictionary<string, WindowSnapshot> snapshots = new Dictionary<string, WindowSnapshot>();
         private readonly PositionStore positionStore;
@@ -166,6 +168,8 @@ namespace MoliWindowTiler
         private readonly HashSet<string> preferredCharacters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly List<string> preferredOrder = new List<string>();
         private readonly List<ClientHotkeyBinding> clientHotkeys = new List<ClientHotkeyBinding>();
+        private readonly List<TargetProfile> targetProfiles = new List<TargetProfile>();
+        private string activeTargetProfileId = TargetProfile.MoliDefaultId;
         private readonly Dictionary<int, ClientHotkeyBinding> registeredHotkeys =
             new Dictionary<int, ClientHotkeyBinding>();
         private readonly List<string> hotkeyFailures = new List<string>();
@@ -320,6 +324,26 @@ namespace MoliWindowTiler
             };
             settings.Controls.Add(features, 0, 2);
             settings.SetColumnSpan(features, 8);
+            Label targetProfileLabel = new Label
+            {
+                Text = "目标程序",
+                AutoSize = true,
+                Margin = new Padding(2, 7, 3, 0),
+                ForeColor = Color.FromArgb(70, 78, 90)
+            };
+            features.Controls.Add(targetProfileLabel);
+            targetProfileBox.DropDownStyle = ComboBoxStyle.DropDownList;
+            targetProfileBox.Width = 150;
+            targetProfileBox.Height = 27;
+            targetProfileBox.Margin = new Padding(2, 2, 4, 0);
+            targetProfileBox.SelectedIndexChanged += delegate { TargetProfileSelectionChanged(); };
+            features.Controls.Add(targetProfileBox);
+            manageProfilesButton.Text = "管理目标程序";
+            manageProfilesButton.Width = 100;
+            manageProfilesButton.Height = 27;
+            manageProfilesButton.Margin = new Padding(2, 2, 12, 0);
+            manageProfilesButton.Click += delegate { ManageTargetProfiles(); };
+            features.Controls.Add(manageProfilesButton);
             switcherBox.Text = "显示点击切换浮层";
             switcherBox.Checked = true;
             switcherBox.AutoSize = true;
@@ -573,12 +597,97 @@ namespace MoliWindowTiler
             trayIcon.Visible = false;
         }
 
+        private TargetProfile CurrentTargetProfile()
+        {
+            TargetProfile selected = targetProfileBox.SelectedItem as TargetProfile;
+            if (selected != null) return selected;
+            selected = targetProfiles.FirstOrDefault(profile =>
+                string.Equals(profile.Id, activeTargetProfileId, StringComparison.OrdinalIgnoreCase));
+            return selected ?? TargetProfile.CreateMoliDefault();
+        }
+
+        private void LoadTargetProfiles(IList<TargetProfile> source, string activeId)
+        {
+            AppSettings migration = new AppSettings
+            {
+                TargetProfiles = source == null
+                    ? null
+                    : source.Where(profile => profile != null).Select(profile => profile.Clone()).ToList(),
+                ActiveTargetProfileId = activeId
+            };
+            SettingsStore.EnsureTargetProfiles(migration);
+            targetProfiles.Clear();
+            targetProfiles.AddRange(migration.TargetProfiles.Select(profile => profile.Clone()));
+            activeTargetProfileId = migration.ActiveTargetProfileId ?? TargetProfile.MoliDefaultId;
+            BindTargetProfileBox();
+        }
+
+        private void BindTargetProfileBox()
+        {
+            targetProfileBox.BeginUpdate();
+            try
+            {
+                targetProfileBox.Items.Clear();
+                foreach (TargetProfile profile in targetProfiles)
+                    if (profile != null && profile.Enabled) targetProfileBox.Items.Add(profile);
+                int selected = -1;
+                for (int i = 0; i < targetProfileBox.Items.Count; i++)
+                {
+                    TargetProfile profile = targetProfileBox.Items[i] as TargetProfile;
+                    if (profile != null && string.Equals(profile.Id, activeTargetProfileId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        selected = i;
+                        break;
+                    }
+                }
+                if (selected < 0 && targetProfileBox.Items.Count > 0) selected = 0;
+                targetProfileBox.SelectedIndex = selected;
+                TargetProfile current = targetProfileBox.SelectedItem as TargetProfile;
+                if (current != null) activeTargetProfileId = current.Id;
+            }
+            finally { targetProfileBox.EndUpdate(); }
+        }
+
+        private void TargetProfileSelectionChanged()
+        {
+            if (!controlsReady || applyingSettings) return;
+            TargetProfile selected = targetProfileBox.SelectedItem as TargetProfile;
+            if (selected == null || string.Equals(selected.Id, activeTargetProfileId, StringComparison.OrdinalIgnoreCase)) return;
+            CaptureCurrentPositions();
+            activeTargetProfileId = selected.Id;
+            SaveSettings();
+            RegisterClientHotkeys();
+            RefreshWindows();
+        }
+
+        private void ManageTargetProfiles()
+        {
+            using (TargetProfileManagerDialog dialog = new TargetProfileManagerDialog(targetProfiles))
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                string previous = activeTargetProfileId;
+                targetProfiles.Clear();
+                foreach (TargetProfile profile in dialog.Profiles)
+                    if (profile != null) targetProfiles.Add(profile.Clone());
+                SettingsStore.EnsureTargetProfiles(new AppSettings { TargetProfiles = targetProfiles, ActiveTargetProfileId = previous });
+                activeTargetProfileId = targetProfiles.Any(profile =>
+                    string.Equals(profile.Id, previous, StringComparison.OrdinalIgnoreCase))
+                    ? previous : TargetProfile.MoliDefaultId;
+                BindTargetProfileBox();
+                SaveSettings();
+                RegisterClientHotkeys();
+                RefreshWindows();
+            }
+        }
+
         private void ApplySettings(AppSettings settings)
         {
             if (settings == null) return;
             applyingSettings = true;
             try
             {
+                SettingsStore.EnsureTargetProfiles(settings);
+                LoadTargetProfiles(settings.TargetProfiles, settings.ActiveTargetProfileId);
                 columnsBox.SelectedIndex = settings.LayoutMode >= 0 && settings.LayoutMode < columnsBox.Items.Count
                     ? settings.LayoutMode : 0;
                 customRowsBox.Text = string.IsNullOrWhiteSpace(settings.CustomRows) ? "3,3" : settings.CustomRows;
@@ -668,7 +777,9 @@ namespace MoliWindowTiler
                     HasSelection = hasSavedSelection,
                     SelectedCharacters = preferredCharacters.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList(),
                     ClientOrder = preferredOrder.ToList(),
-                    ClientHotkeys = clientHotkeys.Select(binding => binding.Clone()).ToList()
+                    ClientHotkeys = clientHotkeys.Select(binding => binding.Clone()).ToList(),
+                    TargetProfiles = targetProfiles.Select(profile => profile.Clone()).ToList(),
+                    ActiveTargetProfileId = activeTargetProfileId
                 });
             }
             catch
@@ -717,10 +828,10 @@ namespace MoliWindowTiler
             refreshingWindows = true;
             try
             {
-                List<GameWindow> found = Native.FindGames();
+                List<GameWindow> found = Native.FindGames(CurrentTargetProfile());
                 ApplySavedPositions(found);
                 games = ApplyPreferredOrder(found);
-                closeAllButton.Enabled = games.Count > 0;
+                closeAllButton.Enabled = games.Count > 0 && CurrentTargetProfile().AllowClose;
                 windowList.BeginUpdate();
                 windowList.Items.Clear();
                 foreach (GameWindow game in games)
@@ -1097,7 +1208,7 @@ namespace MoliWindowTiler
             try
             {
                 CaptureCurrentPositions();
-                List<GameWindow> found = Native.FindGames();
+                List<GameWindow> found = Native.FindGames(CurrentTargetProfile());
                 HashSet<IntPtr> handles = new HashSet<IntPtr>();
                 foreach (GameWindow game in found)
                 {
@@ -1118,7 +1229,7 @@ namespace MoliWindowTiler
         private void ConfigureClientHotkeys()
         {
             List<GameWindow> liveGames;
-            try { liveGames = ApplyPreferredOrder(Native.FindGames()); }
+            try { liveGames = ApplyPreferredOrder(Native.FindGames(CurrentTargetProfile())); }
             catch (Exception ex)
             {
                 statusLabel.Text = "读取客户端失败：" + ex.Message;
@@ -1216,7 +1327,7 @@ namespace MoliWindowTiler
             {
                 // Read live identities: login names and window handles may have changed.
                 // Discovery only keeps a hotkey press from rebuilding the layout.
-                List<GameWindow> matches = Native.FindGames().Where(candidate =>
+                List<GameWindow> matches = Native.FindGames(CurrentTargetProfile()).Where(candidate =>
                     PositionStore.MatchesIdentity(identity, candidate)).ToList();
                 if (matches.Count == 1)
                 {
@@ -1357,10 +1468,15 @@ namespace MoliWindowTiler
 
         private void CloseAllClients()
         {
+            if (!CurrentTargetProfile().AllowClose)
+            {
+                statusLabel.Text = "当前目标程序配置已禁止关闭客户端。";
+                return;
+            }
             List<GameWindow> found;
             try
             {
-                found = Native.FindGames();
+                found = Native.FindGames(CurrentTargetProfile());
             }
             catch (Exception ex)
             {

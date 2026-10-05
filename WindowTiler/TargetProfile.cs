@@ -60,6 +60,11 @@ namespace MoliWindowTiler
             };
         }
 
+        public override string ToString()
+        {
+            return string.IsNullOrWhiteSpace(Name) ? (Id ?? "未命名目标") : Name;
+        }
+
         internal bool Matches(string executableName, string windowClass, string title)
         {
             if (!Enabled) return false;

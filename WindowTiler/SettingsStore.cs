@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 
@@ -23,6 +24,8 @@ namespace MoliWindowTiler
         [DataMember(Name = "minimizeToTray", Order = 12)] public bool MinimizeToTray = true;
         [DataMember(Name = "minimizeAllModifiers", Order = 13)] public uint MinimizeAllModifiers = HotkeyDefaults.MinimizeAllModifiers;
         [DataMember(Name = "minimizeAllKey", Order = 14)] public uint MinimizeAllKey = HotkeyDefaults.MinimizeAllKey;
+        [DataMember(Name = "targetProfiles", Order = 15)] public List<TargetProfile> TargetProfiles;
+        [DataMember(Name = "activeTargetProfileId", Order = 16)] public string ActiveTargetProfileId;
     }
 
     internal sealed class SettingsStore
@@ -51,6 +54,7 @@ namespace MoliWindowTiler
                     if (!hasTraySetting) settings.MinimizeToTray = true;
                     if (!hasMinimizeAllModifiers) settings.MinimizeAllModifiers = HotkeyDefaults.MinimizeAllModifiers;
                     if (!hasMinimizeAllKey) settings.MinimizeAllKey = HotkeyDefaults.MinimizeAllKey;
+                    EnsureTargetProfiles(settings);
                     return settings;
                 }
             }
@@ -77,8 +81,33 @@ namespace MoliWindowTiler
                 ClientHotkeys = new List<ClientHotkeyBinding>(),
                 MinimizeToTray = true,
                 MinimizeAllModifiers = HotkeyDefaults.MinimizeAllModifiers,
-                MinimizeAllKey = HotkeyDefaults.MinimizeAllKey
+                MinimizeAllKey = HotkeyDefaults.MinimizeAllKey,
+                TargetProfiles = new List<TargetProfile> { TargetProfile.CreateMoliDefault() },
+                ActiveTargetProfileId = TargetProfile.MoliDefaultId
             };
+        }
+
+        internal static void EnsureTargetProfiles(AppSettings settings)
+        {
+            if (settings == null) return;
+            List<TargetProfile> profiles = new List<TargetProfile>();
+            if (settings.TargetProfiles != null)
+            {
+                foreach (TargetProfile profile in settings.TargetProfiles)
+                {
+                    if (profile == null) continue;
+                    if (string.IsNullOrWhiteSpace(profile.Id))
+                        profile.Id = Guid.NewGuid().ToString("N");
+                    if (string.IsNullOrWhiteSpace(profile.Name)) profile.Name = profile.Id;
+                    if (!profiles.Any(existing => string.Equals(existing.Id, profile.Id, StringComparison.OrdinalIgnoreCase)))
+                        profiles.Add(profile);
+                }
+            }
+            if (!profiles.Any(profile => string.Equals(profile.Id, TargetProfile.MoliDefaultId, StringComparison.OrdinalIgnoreCase)))
+                profiles.Insert(0, TargetProfile.CreateMoliDefault());
+            settings.TargetProfiles = profiles;
+            if (!profiles.Any(profile => string.Equals(profile.Id, settings.ActiveTargetProfileId, StringComparison.OrdinalIgnoreCase)))
+                settings.ActiveTargetProfileId = TargetProfile.MoliDefaultId;
         }
 
         public void Save(AppSettings settings)

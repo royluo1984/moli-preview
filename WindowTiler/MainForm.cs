@@ -191,7 +191,7 @@ namespace MoliWindowTiler
             switcher = new SwitcherOverlay(ActivateGame);
             switcher.UserClosed += delegate { if (!IsDisposed && !Disposing) switcherBox.Checked = false; };
             switcher.OrderChanged += HandleSwitcherOrderChanged;
-            Text = "魔力宝贝窗口排列器";
+            Text = Program.MainWindowTitle;
             StartPosition = FormStartPosition.CenterScreen;
             MinimumSize = new Size(940, 620);
             ClientSize = new Size(1180, 760);
@@ -589,13 +589,52 @@ namespace MoliWindowTiler
         private void RestoreFromTray()
         {
             if (exiting || IsDisposed || Disposing) return;
-            minimizingToTray = false;
-            ShowInTaskbar = true;
-            if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
-            Show();
-            Activate();
-            BringToFront();
-            trayIcon.Visible = false;
+            minimizingToTray = true;
+            try
+            {
+                ShowInTaskbar = true;
+                WindowState = FormWindowState.Normal;
+                Show();
+
+                if (IsHandleCreated)
+                {
+                    Native.ShowWindowAsync(Handle, 9); // SW_RESTORE
+                    Native.BringWindowToTop(Handle);
+                    Native.SetForegroundWindow(Handle);
+                }
+                Activate();
+                BringToFront();
+                Focus();
+                trayIcon.Visible = false;
+            }
+            finally
+            {
+                minimizingToTray = false;
+            }
+
+            // NotifyIcon callbacks can run while Windows is changing the foreground
+            // window. A second activation on the UI queue makes tray restoration
+            // reliable for both a click and a duplicate application launch.
+            if (!IsDisposed && !Disposing && IsHandleCreated)
+            {
+                try
+                {
+                    BeginInvoke((MethodInvoker)delegate
+                    {
+                        if (exiting || IsDisposed || Disposing) return;
+                        WindowState = FormWindowState.Normal;
+                        ShowInTaskbar = true;
+                        Native.ShowWindowAsync(Handle, 9); // SW_RESTORE
+                        Native.BringWindowToTop(Handle);
+                        Native.SetForegroundWindow(Handle);
+                        Activate();
+                        BringToFront();
+                        Focus();
+                    });
+                }
+                catch (ObjectDisposedException) { }
+                catch (InvalidOperationException) { }
+            }
         }
 
         private TargetProfile CurrentTargetProfile()
@@ -1416,6 +1455,11 @@ namespace MoliWindowTiler
         protected override void WndProc(ref Message message)
         {
             const int WM_HOTKEY = 0x0312;
+            if (Program.ActivateMessage != 0 && message.Msg == Program.ActivateMessage)
+            {
+                RestoreFromTray();
+                return;
+            }
             if (message.Msg == WM_HOTKEY && controlsReady && !IsDisposed && !Disposing)
             {
                 int id = message.WParam.ToInt32();

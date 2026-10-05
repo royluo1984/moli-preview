@@ -75,6 +75,8 @@ namespace MoliWindowTiler
         [DllImport("user32.dll")] internal static extern bool IsZoomed(IntPtr hwnd);
         [DllImport("user32.dll")] internal static extern bool IsHungAppWindow(IntPtr hwnd);
         [DllImport("user32.dll")] internal static extern IntPtr GetWindow(IntPtr hwnd, uint command);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        internal static extern IntPtr FindWindow(string className, string windowName);
         [DllImport("user32.dll")] internal static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] internal static extern int GetClassName(IntPtr hwnd, StringBuilder text, int count);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] internal static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int count);

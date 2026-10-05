@@ -34,6 +34,7 @@
     <Compile Include="HotkeySettings.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="SwitcherOverlay.cs" />
+    <Compile Include="TargetProfile.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

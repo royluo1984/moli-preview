@@ -40,6 +40,9 @@ namespace MoliWindowTiler
         public bool Minimized;
         public bool Maximized;
         public WindowPlacement Placement;
+        public string TargetProfileId;
+        public string TargetProfileName;
+        public List<string> IdentityCandidates;
         public string Key { get { return Pid + ":" + Started + ":" + Handle.ToInt64(); } }
     }
 
@@ -88,10 +91,15 @@ namespace MoliWindowTiler
 
         internal static GameWindow ReadWindow(IntPtr hwnd)
         {
+            return ReadWindow(hwnd, TargetProfile.CreateMoliDefault());
+        }
+
+        internal static GameWindow ReadWindow(IntPtr hwnd, TargetProfile profile)
+        {
             if (!IsWindowVisible(hwnd) || GetWindow(hwnd, 4) != IntPtr.Zero) return null;
+            profile = profile ?? TargetProfile.CreateMoliDefault();
             StringBuilder className = new StringBuilder(256);
             GetClassName(hwnd, className, className.Capacity);
-            if (!string.Equals(className.ToString(), "Reincar", StringComparison.OrdinalIgnoreCase)) return null;
             uint pid;
             uint threadId = GetWindowThreadProcessId(hwnd, out pid);
             IntPtr process = OpenProcess(0x1000, false, pid);
@@ -103,7 +111,7 @@ namespace MoliWindowTiler
                 int length = path.Capacity;
                 if (!QueryFullProcessImageName(process, 0, path, ref length)) return null;
                 string executableName = Path.GetFileName(path.ToString());
-                if (!string.Equals(executableName, Program.GameExecutableName, StringComparison.OrdinalIgnoreCase)) return null;
+                if (!profile.MatchesExecutableAndClass(executableName, className.ToString())) return null;
                 if (!GetProcessTimes(process, out started, out ended, out kernel, out user)) return null;
             }
             finally { CloseHandle(process); }
@@ -119,8 +127,11 @@ namespace MoliWindowTiler
             if (outer.Width <= 0 || outer.Height <= 0) return null;
             StringBuilder title = new StringBuilder(1024);
             GetWindowText(hwnd, title, title.Capacity);
+            if (!profile.MatchesTitle(title.ToString())) return null;
             string threadDescription = ReadThreadDescription(threadId);
-            string characterName = CharacterFromWindow(title.ToString(), threadDescription, threadId);
+            List<string> identityCandidates = profile.ExtractIdentityCandidates(
+                title.ToString(), threadDescription, threadId);
+            string characterName = FirstIdentity(identityCandidates, threadId);
             Size clientSize = client.Rectangle.Size;
             string resolution = clientSize.Width + "×" + clientSize.Height;
             if (minimized) resolution = "最小化 · 按还原尺寸预览";
@@ -130,8 +141,24 @@ namespace MoliWindowTiler
                 ThreadDescription = threadDescription, CharacterName = characterName,
                 Title = title.ToString(),
                 Bounds = outer, ClientSize = clientSize, Resolution = resolution,
-                Minimized = minimized, Maximized = maximized, Placement = placement
+                Minimized = minimized, Maximized = maximized, Placement = placement,
+                TargetProfileId = profile.Id ?? "",
+                TargetProfileName = profile.Name ?? "",
+                IdentityCandidates = identityCandidates
             };
+        }
+
+        private static string FirstIdentity(IList<string> candidates, uint threadId)
+        {
+            if (candidates != null)
+            {
+                foreach (string candidate in candidates)
+                {
+                    if (!string.IsNullOrWhiteSpace(candidate) && !LooksGeneric(candidate))
+                        return CleanCharacter(candidate);
+                }
+            }
+            return "未命名-线程" + threadId;
         }
 
         private static string ReadThreadDescription(uint threadId)
@@ -167,6 +194,8 @@ namespace MoliWindowTiler
         internal static List<string> CharacterCandidates(GameWindow game)
         {
             if (game == null) return new List<string>();
+            if (game.IdentityCandidates != null && game.IdentityCandidates.Count > 0)
+                return new List<string>(game.IdentityCandidates);
             List<string> result = CharacterCandidates(game.Title, game.ThreadDescription, game.ThreadId);
             AddCandidate(result, game.CharacterName);
             return result;
@@ -233,10 +262,15 @@ namespace MoliWindowTiler
 
         internal static List<GameWindow> FindGames()
         {
+            return FindGames(TargetProfile.CreateMoliDefault());
+        }
+
+        internal static List<GameWindow> FindGames(TargetProfile profile)
+        {
             List<GameWindow> games = new List<GameWindow>();
             EnumProc callback = delegate(IntPtr hwnd, IntPtr data)
             {
-                GameWindow game = ReadWindow(hwnd);
+                GameWindow game = ReadWindow(hwnd, profile);
                 if (game != null) games.Add(game);
                 return true;
             };

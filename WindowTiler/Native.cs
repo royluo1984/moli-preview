@@ -116,7 +116,6 @@ namespace MoliWindowTiler
                 if (!IsWindowVisible(hwnd) || GetWindow(hwnd, 4) != IntPtr.Zero) return true;
                 StringBuilder title = new StringBuilder(1024);
                 GetWindowText(hwnd, title, title.Capacity);
-                if (string.IsNullOrWhiteSpace(title.ToString())) return true;
                 StringBuilder className = new StringBuilder(256);
                 GetClassName(hwnd, className, className.Capacity);
                 uint pid;

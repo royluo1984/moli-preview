@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
 
@@ -35,6 +36,7 @@ namespace MoliWindowTiler
         private readonly CheckBox allowCloseBox = new CheckBox();
         private readonly CheckBox enabledBox = new CheckBox();
         private readonly Label patternHint = new Label();
+        private readonly TextBox testResultBox = new TextBox();
 
         internal TargetProfile Profile { get { return profile; } }
 
@@ -56,7 +58,7 @@ namespace MoliWindowTiler
             MinimizeBox = false;
             ShowInTaskbar = false;
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(640, 430);
+            ClientSize = new Size(640, 520);
             BuildControls();
             LoadProfile();
         }
@@ -67,12 +69,13 @@ namespace MoliWindowTiler
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 2,
-                RowCount = 10,
+                RowCount = 11,
                 Padding = new Padding(12)
             };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             for (int i = 0; i < 9; i++) root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             Controls.Add(root);
 
@@ -132,6 +135,16 @@ namespace MoliWindowTiler
             root.Controls.Add(new Label { Text = "操作权限", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 8);
             root.Controls.Add(flags, 1, 8);
 
+            AddLabel(root, "识别测试", 9);
+            testResultBox.ReadOnly = true;
+            testResultBox.Multiline = true;
+            testResultBox.ScrollBars = ScrollBars.Vertical;
+            testResultBox.Dock = DockStyle.Fill;
+            testResultBox.Margin = new Padding(3, 3, 3, 3);
+            testResultBox.BackColor = Color.FromArgb(248, 250, 252);
+            testResultBox.Text = "点击“测试识别”查看当前规则能匹配到的窗口。";
+            root.Controls.Add(testResultBox, 1, 9);
+
             FlowLayoutPanel actions = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -142,12 +155,15 @@ namespace MoliWindowTiler
             Button cancel = new Button { Text = "取消", Width = 80, Height = 28, DialogResult = DialogResult.Cancel };
             Button save = new Button { Text = "保存", Width = 80, Height = 28 };
             Button read = new Button { Text = "读取选中样本", Width = 110, Height = 28 };
+            Button test = new Button { Text = "测试识别", Width = 90, Height = 28 };
             read.Click += delegate { ReadSelectedSample(); };
+            test.Click += delegate { TestRecognition(); };
             save.Click += delegate { SaveAndClose(); };
             actions.Controls.Add(cancel);
             actions.Controls.Add(save);
+            actions.Controls.Add(test);
             actions.Controls.Add(read);
-            root.Controls.Add(actions, 0, 9);
+            root.Controls.Add(actions, 0, 10);
             root.SetColumnSpan(actions, 2);
             AcceptButton = save;
             CancelButton = cancel;
@@ -225,42 +241,106 @@ namespace MoliWindowTiler
             UpdatePatternState();
         }
 
-        private void SaveAndClose()
+        private bool TryBuildProfile(out TargetProfile result, out string error)
         {
+            result = profile.Clone();
+            error = "";
             string name = (nameBox.Text ?? "").Trim();
             string executable = (executableBox.Text ?? "").Trim();
             string windowClass = (classBox.Text ?? "").Trim();
             if (name.Length == 0)
             {
-                MessageBox.Show(this, "请填写配置名称。", "目标程序", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
+                error = "请填写配置名称。";
+                return false;
             }
             if (executable.Length == 0 && windowClass.Length == 0)
             {
-                MessageBox.Show(this, "进程文件名和窗口类至少填写一项。", "目标程序", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
+                error = "进程文件名和窗口类至少填写一项。";
+                return false;
             }
             ProfileIdentityChoice choice = identityBox.SelectedItem as ProfileIdentityChoice;
-            if (choice == null) return;
+            if (choice == null)
+            {
+                error = "请选择身份来源。";
+                return false;
+            }
             if (patternBox.Enabled && patternBox.Text.Trim().Length > 0)
             {
                 try { new Regex(patternBox.Text.Trim()); }
                 catch (ArgumentException ex)
                 {
-                    MessageBox.Show(this, "正则表达式格式有误：" + ex.Message, "目标程序", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
+                    error = "正则表达式格式有误：" + ex.Message;
+                    return false;
                 }
             }
-            profile.Name = name;
-            profile.ExecutableName = executable;
-            profile.WindowClass = windowClass;
-            profile.TitleContains = (titleBox.Text ?? "").Trim();
-            profile.IdentitySource = choice.Value;
-            profile.IdentityPattern = (patternBox.Text ?? "").Trim();
-            profile.AllowClose = allowCloseBox.Checked;
-            profile.Enabled = enabledBox.Checked;
+            result.Name = name;
+            result.ExecutableName = executable;
+            result.WindowClass = windowClass;
+            result.TitleContains = (titleBox.Text ?? "").Trim();
+            result.IdentitySource = choice.Value;
+            result.IdentityPattern = (patternBox.Text ?? "").Trim();
+            result.AllowClose = allowCloseBox.Checked;
+            result.Enabled = enabledBox.Checked;
+            return true;
+        }
+
+        private void SaveAndClose()
+        {
+            TargetProfile next;
+            string error;
+            if (!TryBuildProfile(out next, out error))
+            {
+                MessageBox.Show(this, error, "目标程序", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            profile.Name = next.Name;
+            profile.ExecutableName = next.ExecutableName;
+            profile.WindowClass = next.WindowClass;
+            profile.TitleContains = next.TitleContains;
+            profile.IdentitySource = next.IdentitySource;
+            profile.IdentityPattern = next.IdentityPattern;
+            profile.AllowClose = next.AllowClose;
+            profile.Enabled = next.Enabled;
             DialogResult = DialogResult.OK;
             Close();
+        }
+
+        private void TestRecognition()
+        {
+            TargetProfile testProfile;
+            string error;
+            if (!TryBuildProfile(out testProfile, out error))
+            {
+                testResultBox.Text = error;
+                return;
+            }
+            testProfile.Enabled = true;
+            try
+            {
+                List<GameWindow> found = Native.FindGames(testProfile);
+                StringBuilder output = new StringBuilder();
+                output.AppendLine("匹配窗口：" + found.Count + " 个");
+                Dictionary<string, int> identities = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                foreach (GameWindow game in found)
+                {
+                    string identity = string.IsNullOrWhiteSpace(game.CharacterName) ? "未命名" : game.CharacterName;
+                    int count;
+                    identities.TryGetValue(identity, out count);
+                    identities[identity] = count + 1;
+                    output.AppendLine("· " + identity + "  |  " + game.Title);
+                }
+                List<string> duplicates = identities.Where(pair => pair.Value > 1)
+                    .Select(pair => pair.Key + "（" + pair.Value + " 个）").ToList();
+                if (duplicates.Count > 0)
+                    output.AppendLine("重复身份：" + string.Join("、", duplicates));
+                if (found.Count == 0)
+                    output.AppendLine("请检查进程名、窗口类和标题筛选条件。");
+                testResultBox.Text = output.ToString();
+            }
+            catch (Exception ex)
+            {
+                testResultBox.Text = "识别测试失败：" + ex.Message;
+            }
         }
 
         internal static IEnumerable<ProfileIdentityChoice> IdentityChoices()
@@ -421,6 +501,27 @@ namespace MoliWindowTiler
         private void SaveAndClose()
         {
             SettingsStore.EnsureTargetProfiles(new AppSettings { TargetProfiles = profiles });
+            List<string> conflicts = new List<string>();
+            for (int i = 0; i < profiles.Count; i++)
+            {
+                for (int j = i + 1; j < profiles.Count; j++)
+                {
+                    TargetProfile first = profiles[i];
+                    TargetProfile second = profiles[j];
+                    if (first == null || second == null || !first.MayOverlap(second)) continue;
+                    conflicts.Add("“" + first.Name + "” 与 “" + second.Name + "”\n  " +
+                        first.MatchDescription() + "\n  " + second.MatchDescription());
+                }
+            }
+            if (conflicts.Count > 0)
+            {
+                DialogResult choice = MessageBox.Show(this,
+                    "发现可能匹配同一窗口的目标程序配置：\n\n" + string.Join("\n\n", conflicts) +
+                    "\n\n仍然保存这些配置吗？",
+                    "目标程序配置提示", MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2);
+                if (choice != DialogResult.Yes) return;
+            }
             DialogResult = DialogResult.OK;
             Close();
         }

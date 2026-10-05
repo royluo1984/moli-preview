@@ -94,6 +94,27 @@ namespace MoliWindowTiler
             return true;
         }
 
+        internal bool MayOverlap(TargetProfile other)
+        {
+            if (other == null || !Enabled || !other.Enabled) return false;
+            if (!string.IsNullOrWhiteSpace(ExecutableName) && !string.IsNullOrWhiteSpace(other.ExecutableName) &&
+                !string.Equals(Path.GetFileName(ExecutableName.Trim()), Path.GetFileName(other.ExecutableName.Trim()),
+                    StringComparison.OrdinalIgnoreCase)) return false;
+            if (!string.IsNullOrWhiteSpace(WindowClass) && !string.IsNullOrWhiteSpace(other.WindowClass) &&
+                !string.Equals(WindowClass.Trim(), other.WindowClass.Trim(), StringComparison.OrdinalIgnoreCase)) return false;
+            if (!string.IsNullOrWhiteSpace(TitleContains) && !string.IsNullOrWhiteSpace(other.TitleContains) &&
+                !string.Equals(TitleContains.Trim(), other.TitleContains.Trim(), StringComparison.OrdinalIgnoreCase)) return true;
+            return true;
+        }
+
+        internal string MatchDescription()
+        {
+            string executable = string.IsNullOrWhiteSpace(ExecutableName) ? "任意进程" : Path.GetFileName(ExecutableName.Trim());
+            string windowClass = string.IsNullOrWhiteSpace(WindowClass) ? "任意窗口类" : WindowClass.Trim();
+            string title = string.IsNullOrWhiteSpace(TitleContains) ? "无标题筛选" : "标题含“" + TitleContains.Trim() + "”";
+            return executable + " / " + windowClass + " / " + title;
+        }
+
         internal List<string> ExtractIdentityCandidates(string title, string threadDescription, uint threadId)
         {
             string source = string.IsNullOrWhiteSpace(IdentitySource) ? IdentityMoli : IdentitySource;

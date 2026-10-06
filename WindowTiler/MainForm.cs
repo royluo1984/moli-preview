@@ -228,7 +228,9 @@ namespace MoliWindowTiler
                 Padding = new Padding(10),
                 BackColor = BackColor
             };
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 156));
+            // Keep enough vertical room for the feature controls to wrap on
+            // narrower screens instead of hiding the rightmost options.
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 206));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
             Controls.Add(root);
@@ -319,8 +321,8 @@ namespace MoliWindowTiler
             {
                 Dock = DockStyle.Fill,
                 FlowDirection = FlowDirection.LeftToRight,
-                WrapContents = false,
-                AutoScroll = true,
+                WrapContents = true,
+                AutoScroll = false,
                 Padding = new Padding(0, 2, 0, 0)
             };
             settings.Controls.Add(features, 0, 2);

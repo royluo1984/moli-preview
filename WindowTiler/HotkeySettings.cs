@@ -15,6 +15,8 @@ namespace MoliWindowTiler
         internal const uint ModWindows = 0x0008;
         internal const uint MinimizeAllModifiers = ModControl | ModAlt;
         internal const uint MinimizeAllKey = (uint)Keys.Oem3;
+        internal const uint CycleClientsModifiers = ModControl;
+        internal const uint CycleClientsKey = (uint)Keys.Oem3;
     }
 
     internal static class HotkeyFormatter
@@ -173,7 +175,7 @@ namespace MoliWindowTiler
             Label description = new Label
             {
                 Dock = DockStyle.Fill,
-                Text = "登录角色后设置快捷键，重启后仍按角色匹配。选择“未设置”可移除绑定；离线角色的绑定也会保留。",
+                Text = "登录角色后设置快捷键，重启后仍按角色匹配。离线绑定会保留；不同身份可共用组合键，按下后会在对应在线客户端间轮换。",
                 AutoEllipsis = true,
                 TextAlign = ContentAlignment.MiddleLeft
             };
@@ -391,12 +393,8 @@ namespace MoliWindowTiler
 
         private void AssignDefaultShortcuts()
         {
-            HashSet<uint> reserved = new HashSet<uint>(rows.Where(row => !row.Online &&
-                ((HotkeyModifierChoice)row.ModifierBox.SelectedItem).Value == (ModControl | ModAlt))
-                .Select(row => (uint)((HotkeyKeyChoice)row.KeyBox.SelectedItem).Value));
             Queue<Keys> available = new Queue<Keys>(Enumerable.Range(1, 10)
-                .Select(number => (Keys)((int)Keys.D0 + number % 10))
-                .Where(key => !reserved.Contains((uint)key)));
+                .Select(number => (Keys)((int)Keys.D0 + number % 10)));
             foreach (HotkeyRow row in rows.Where(row => row.Online))
             {
                 SelectModifier(row.ModifierBox, ModControl | ModAlt);
@@ -425,18 +423,11 @@ namespace MoliWindowTiler
         {
             error = "";
             List<ClientHotkeyBinding> next = new List<ClientHotkeyBinding>();
-            HashSet<string> used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (HotkeyRow row in rows)
             {
                 HotkeyModifierChoice modifier = row.ModifierBox.SelectedItem as HotkeyModifierChoice;
                 HotkeyKeyChoice key = row.KeyBox.SelectedItem as HotkeyKeyChoice;
                 if (modifier == null || key == null || key.Value == Keys.None) continue;
-                string combination = modifier.Value + ":" + (uint)key.Value;
-                if (!used.Add(combination))
-                {
-                    error = "快捷键重复：" + modifier.Text + " + " + key.Text;
-                    return false;
-                }
                 if (string.IsNullOrWhiteSpace(row.Identity)) continue;
                 next.Add(new ClientHotkeyBinding
                 {
@@ -457,17 +448,24 @@ namespace MoliWindowTiler
         private readonly Label previewLabel = new Label();
         private readonly uint initialModifiers;
         private readonly uint initialKey;
+        private readonly uint defaultModifiers;
+        private readonly uint defaultKey;
+        private readonly string descriptionText;
 
         public uint Modifiers { get; private set; }
         public uint Key { get; private set; }
 
-        public GlobalHotkeySettingsDialog(uint modifiers, uint key)
+        public GlobalHotkeySettingsDialog(string title, string descriptionText,
+            uint defaultModifiers, uint defaultKey, uint modifiers, uint key)
         {
             Modifiers = modifiers;
             Key = key;
             initialModifiers = modifiers;
             initialKey = key;
-            Text = "全部最小化快捷键";
+            this.defaultModifiers = defaultModifiers;
+            this.defaultKey = defaultKey;
+            this.descriptionText = descriptionText;
+            Text = title;
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
@@ -498,7 +496,7 @@ namespace MoliWindowTiler
 
             Label description = new Label
             {
-                Text = "按下组合键即可最小化所有已发现的游戏客户端。",
+                Text = descriptionText,
                 Dock = DockStyle.Fill,
                 AutoEllipsis = true,
                 TextAlign = ContentAlignment.MiddleLeft
@@ -551,8 +549,8 @@ namespace MoliWindowTiler
             Button defaultButton = new Button { Text = "恢复默认", Width = 82, Height = 28 };
             defaultButton.Click += delegate
             {
-                HotkeySettingsDialog.SelectModifier(modifierBox, HotkeyDefaults.MinimizeAllModifiers);
-                HotkeySettingsDialog.SelectKey(keyBox, (Keys)HotkeyDefaults.MinimizeAllKey);
+                HotkeySettingsDialog.SelectModifier(modifierBox, defaultModifiers);
+                HotkeySettingsDialog.SelectKey(keyBox, (Keys)defaultKey);
                 UpdatePreview();
             };
             actions.Controls.Add(cancelButton);

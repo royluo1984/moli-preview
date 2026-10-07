@@ -149,6 +149,7 @@ namespace MoliWindowTiler
         private readonly Button closeAllButton = new Button();
         private readonly Button hotkeyButton = new Button();
         private readonly Button minimizeHotkeyButton = new Button();
+        private readonly Button cycleHotkeyButton = new Button();
         private readonly Button manageProfilesButton = new Button();
         private readonly PreviewPanel preview = new PreviewPanel();
         private readonly Dictionary<string, WindowSnapshot> snapshots = new Dictionary<string, WindowSnapshot>();
@@ -171,11 +172,18 @@ namespace MoliWindowTiler
         private readonly List<TargetProfile> targetProfiles = new List<TargetProfile>();
         private readonly List<TargetProfileState> profileStates = new List<TargetProfileState>();
         private string activeTargetProfileId = TargetProfile.MoliDefaultId;
-        private readonly Dictionary<int, ClientHotkeyBinding> registeredHotkeys =
-            new Dictionary<int, ClientHotkeyBinding>();
+        private readonly Dictionary<int, List<ClientHotkeyBinding>> registeredHotkeys =
+            new Dictionary<int, List<ClientHotkeyBinding>>();
+        private readonly Dictionary<string, IntPtr> lastHotkeyClientHandles =
+            new Dictionary<string, IntPtr>(StringComparer.OrdinalIgnoreCase);
         private readonly List<string> hotkeyFailures = new List<string>();
         private const int FirstHotkeyId = 0x5200;
+        private const int CycleClientsHotkeyId = 0x51FE;
         private const int MinimizeAllHotkeyId = 0x51FF;
+        private uint cycleClientsModifiers = HotkeyDefaults.CycleClientsModifiers;
+        private uint cycleClientsKey = HotkeyDefaults.CycleClientsKey;
+        private bool cycleClientsHotkeyRegistered;
+        private IntPtr lastCycledClientHandle;
         private uint minimizeAllModifiers = HotkeyDefaults.MinimizeAllModifiers;
         private uint minimizeAllKey = HotkeyDefaults.MinimizeAllKey;
         private bool minimizeAllHotkeyRegistered;
@@ -371,6 +379,12 @@ namespace MoliWindowTiler
             minimizeHotkeyButton.Click += delegate { ConfigureMinimizeAllHotkey(); };
             features.Controls.Add(minimizeHotkeyButton);
             UpdateMinimizeHotkeyButtonText();
+            cycleHotkeyButton.Width = 178;
+            cycleHotkeyButton.Height = 27;
+            cycleHotkeyButton.Margin = new Padding(2, 2, 3, 0);
+            cycleHotkeyButton.Click += delegate { ConfigureCycleClientsHotkey(); };
+            features.Controls.Add(cycleHotkeyButton);
+            UpdateCycleHotkeyButtonText();
 
             TableLayoutPanel body = new TableLayoutPanel
             {
@@ -809,6 +823,7 @@ namespace MoliWindowTiler
                 marginBox.Value = Math.Max(marginBox.Minimum, Math.Min(marginBox.Maximum, settings.Margin));
                 switcherBox.Checked = settings.ShowSwitcher;
                 trayBox.Checked = settings.MinimizeToTray;
+                ApplyCycleClientsHotkey(settings.CycleClientsModifiers, settings.CycleClientsKey);
                 ApplyMinimizeAllHotkey(settings.MinimizeAllModifiers, settings.MinimizeAllKey);
                 preferredMonitor = settings.Monitor ?? "";
                 customRowsBox.Enabled = columnsBox.SelectedIndex == 5;
@@ -857,6 +872,8 @@ namespace MoliWindowTiler
                     MinimizeToTray = trayBox.Checked,
                     MinimizeAllModifiers = minimizeAllModifiers,
                     MinimizeAllKey = minimizeAllKey,
+                    CycleClientsModifiers = cycleClientsModifiers,
+                    CycleClientsKey = cycleClientsKey,
                     HasSelection = hasSavedSelection,
                     SelectedCharacters = preferredCharacters.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList(),
                     ClientOrder = preferredOrder.ToList(),
@@ -1238,6 +1255,60 @@ namespace MoliWindowTiler
             catch { switcher.Hide(); }
         }
 
+        private void ApplyCycleClientsHotkey(uint modifiers, uint key)
+        {
+            if (key == 0)
+            {
+                cycleClientsModifiers = 0;
+                cycleClientsKey = 0;
+            }
+            else if (HotkeyFormatter.IsValid(modifiers, key))
+            {
+                cycleClientsModifiers = modifiers;
+                cycleClientsKey = key;
+            }
+            else
+            {
+                cycleClientsModifiers = HotkeyDefaults.CycleClientsModifiers;
+                cycleClientsKey = HotkeyDefaults.CycleClientsKey;
+            }
+            UpdateCycleHotkeyButtonText();
+        }
+
+        private void UpdateCycleHotkeyButtonText()
+        {
+            if (cycleHotkeyButton == null || cycleHotkeyButton.IsDisposed) return;
+            cycleHotkeyButton.Text = "顺序切换：" +
+                HotkeyFormatter.Format(cycleClientsModifiers, cycleClientsKey);
+        }
+
+        private void ConfigureCycleClientsHotkey()
+        {
+            using (GlobalHotkeySettingsDialog dialog = new GlobalHotkeySettingsDialog(
+                "顺序切换快捷键",
+                "按下组合键后，按当前排列顺序激活下一个在线客户端。",
+                HotkeyDefaults.CycleClientsModifiers,
+                HotkeyDefaults.CycleClientsKey,
+                cycleClientsModifiers,
+                cycleClientsKey))
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                ApplyCycleClientsHotkey(dialog.Modifiers, dialog.Key);
+                int failed = RegisterClientHotkeys();
+                SaveSettings();
+                statusLabel.Text = failed == 0
+                    ? "顺序切换快捷键已保存：" + HotkeyFormatter.Format(cycleClientsModifiers, cycleClientsKey)
+                    : "快捷键已保存，但有 " + failed + " 个组合键注册失败。";
+                if (failed > 0)
+                {
+                    MessageBox.Show(this,
+                        "以下快捷键已被其他程序占用或与本软件的其他快捷键冲突，请换用其他组合键：\n\n" +
+                        string.Join("\n", hotkeyFailures),
+                        "顺序切换快捷键", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+        }
+
         private void ApplyMinimizeAllHotkey(uint modifiers, uint key)
         {
             if (key == 0)
@@ -1268,7 +1339,13 @@ namespace MoliWindowTiler
         private void ConfigureMinimizeAllHotkey()
         {
             using (GlobalHotkeySettingsDialog dialog =
-                new GlobalHotkeySettingsDialog(minimizeAllModifiers, minimizeAllKey))
+                new GlobalHotkeySettingsDialog(
+                    "全部最小化快捷键",
+                    "按下组合键即可最小化所有已发现的游戏客户端。",
+                    HotkeyDefaults.MinimizeAllModifiers,
+                    HotkeyDefaults.MinimizeAllKey,
+                    minimizeAllModifiers,
+                    minimizeAllKey))
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
                 ApplyMinimizeAllHotkey(dialog.Modifiers, dialog.Key);
@@ -1307,6 +1384,32 @@ namespace MoliWindowTiler
             catch (Exception ex)
             {
                 statusLabel.Text = "最小化游戏窗口失败：" + ex.Message;
+            }
+        }
+
+        private void CycleNextClient()
+        {
+            try
+            {
+                List<GameWindow> found = ApplyPreferredOrder(Native.FindGames(CurrentTargetProfile()));
+                if (found.Count == 0)
+                {
+                    statusLabel.Text = "当前没有发现可切换的客户端。";
+                    return;
+                }
+
+                IntPtr foreground = Native.GetForegroundWindow();
+                int current = found.FindIndex(game => game.Handle == foreground);
+                if (current < 0)
+                    current = found.FindIndex(game => game.Handle == lastCycledClientHandle);
+                int next = (current + 1) % found.Count;
+                lastCycledClientHandle = found[next].Handle;
+                ActivateGame(lastCycledClientHandle);
+                statusLabel.Text = "顺序切换到：" + found[next].CharacterName;
+            }
+            catch (Exception ex)
+            {
+                statusLabel.Text = "顺序切换客户端失败：" + ex.Message;
             }
         }
 
@@ -1354,9 +1457,21 @@ namespace MoliWindowTiler
             hotkeyFailures.Clear();
             if (!controlsReady || !IsHandleCreated || IsDisposed || Disposing) return 0;
             int failed = 0;
+            const uint MOD_NOREPEAT = 0x4000;
+            if (HotkeyFormatter.IsValid(cycleClientsModifiers, cycleClientsKey))
+            {
+                if (Native.RegisterHotKey(Handle, CycleClientsHotkeyId,
+                    cycleClientsModifiers | MOD_NOREPEAT, cycleClientsKey))
+                    cycleClientsHotkeyRegistered = true;
+                else
+                {
+                    failed++;
+                    hotkeyFailures.Add("顺序切换：" +
+                        HotkeyFormatter.Format(cycleClientsModifiers, cycleClientsKey));
+                }
+            }
             if (HotkeyFormatter.IsValid(minimizeAllModifiers, minimizeAllKey))
             {
-                const uint MOD_NOREPEAT = 0x4000;
                 if (Native.RegisterHotKey(Handle, MinimizeAllHotkeyId,
                     minimizeAllModifiers | MOD_NOREPEAT, minimizeAllKey))
                     minimizeAllHotkeyRegistered = true;
@@ -1368,20 +1483,28 @@ namespace MoliWindowTiler
                 }
             }
             int id = FirstHotkeyId;
-            foreach (ClientHotkeyBinding binding in clientHotkeys)
+            foreach (IGrouping<string, ClientHotkeyBinding> group in clientHotkeys
+                .Where(binding => binding != null && binding.IsValid)
+                .GroupBy(binding => HotkeyCombinationKey(binding.Modifiers, binding.Key)))
             {
-                if (binding == null || !binding.IsValid) continue;
-                const uint MOD_NOREPEAT = 0x4000;
-                if (Native.RegisterHotKey(Handle, id, binding.Modifiers | MOD_NOREPEAT, binding.Key))
-                    registeredHotkeys.Add(id, binding.Clone());
+                List<ClientHotkeyBinding> bindings = group.Select(binding => binding.Clone()).ToList();
+                ClientHotkeyBinding first = bindings[0];
+                if (Native.RegisterHotKey(Handle, id, first.Modifiers | MOD_NOREPEAT, first.Key))
+                    registeredHotkeys.Add(id, bindings);
                 else
                 {
                     failed++;
-                    hotkeyFailures.Add(binding.Identity + "：" + binding.ShortcutText);
+                    hotkeyFailures.Add(string.Join("、", bindings.Select(binding => binding.Identity)) +
+                        "：" + first.ShortcutText);
                 }
                 id++;
             }
             return failed;
+        }
+
+        private static string HotkeyCombinationKey(uint modifiers, uint key)
+        {
+            return modifiers + ":" + key;
         }
 
         private void UnregisterClientHotkeys()
@@ -1389,11 +1512,15 @@ namespace MoliWindowTiler
             if (registeredHotkeys == null) return;
             if (IsHandleCreated)
             {
+                if (cycleClientsHotkeyRegistered)
+                {
+                    try { Native.UnregisterHotKey(Handle, CycleClientsHotkeyId); }
+                    catch { }
+                }
                 if (minimizeAllHotkeyRegistered)
                 {
                     try { Native.UnregisterHotKey(Handle, MinimizeAllHotkeyId); }
                     catch { }
-                    minimizeAllHotkeyRegistered = false;
                 }
                 foreach (int id in registeredHotkeys.Keys.ToList())
                 {
@@ -1401,26 +1528,37 @@ namespace MoliWindowTiler
                     catch { }
                 }
             }
+            cycleClientsHotkeyRegistered = false;
+            minimizeAllHotkeyRegistered = false;
             registeredHotkeys.Clear();
+            lastHotkeyClientHandles.Clear();
         }
 
-        private void ActivateClientByIdentity(string identity)
+        private void ActivateClientsByHotkey(IList<ClientHotkeyBinding> bindings)
         {
-            if (string.IsNullOrWhiteSpace(identity)) return;
+            if (bindings == null || bindings.Count == 0) return;
             try
             {
-                // Read live identities: login names and window handles may have changed.
-                // Discovery only keeps a hotkey press from rebuilding the layout.
-                List<GameWindow> matches = Native.FindGames(CurrentTargetProfile()).Where(candidate =>
-                    PositionStore.MatchesIdentity(identity, candidate)).ToList();
-                if (matches.Count == 1)
+                List<GameWindow> found = ApplyPreferredOrder(Native.FindGames(CurrentTargetProfile()));
+                List<GameWindow> matches = found.Where(game => bindings.Any(binding =>
+                    PositionStore.MatchesIdentity(binding.Identity, game))).ToList();
+                if (matches.Count == 0)
                 {
-                    ActivateGame(matches[0].Handle);
+                    statusLabel.Text = "快捷键对应的角色尚未登录：" +
+                        string.Join("、", bindings.Select(binding => binding.Identity).Distinct(StringComparer.OrdinalIgnoreCase));
                     return;
                 }
-                statusLabel.Text = matches.Count == 0
-                    ? "快捷键对应的角色尚未登录：" + identity
-                    : "多个客户端使用相同角色名，请通过悬浮窗选择：" + identity;
+
+                ClientHotkeyBinding first = bindings[0];
+                string combination = HotkeyCombinationKey(first.Modifiers, first.Key);
+                int current = matches.FindIndex(game => game.Handle == Native.GetForegroundWindow());
+                IntPtr previousHandle;
+                if (current < 0 && lastHotkeyClientHandles.TryGetValue(combination, out previousHandle))
+                    current = matches.FindIndex(game => game.Handle == previousHandle);
+                int next = (current + 1) % matches.Count;
+                lastHotkeyClientHandles[combination] = matches[next].Handle;
+                ActivateGame(matches[next].Handle);
+                statusLabel.Text = "快捷键切换到：" + matches[next].CharacterName;
             }
             catch (Exception ex)
             {
@@ -1465,15 +1603,20 @@ namespace MoliWindowTiler
             if (message.Msg == WM_HOTKEY && controlsReady && !IsDisposed && !Disposing)
             {
                 int id = message.WParam.ToInt32();
+                if (id == CycleClientsHotkeyId && cycleClientsHotkeyRegistered)
+                {
+                    CycleNextClient();
+                    return;
+                }
                 if (id == MinimizeAllHotkeyId && minimizeAllHotkeyRegistered)
                 {
                     MinimizeAllGames();
                     return;
                 }
-                ClientHotkeyBinding binding;
-                if (registeredHotkeys.TryGetValue(id, out binding))
+                List<ClientHotkeyBinding> bindings;
+                if (registeredHotkeys.TryGetValue(id, out bindings))
                 {
-                    ActivateClientByIdentity(binding.Identity);
+                    ActivateClientsByHotkey(bindings);
                     return;
                 }
             }

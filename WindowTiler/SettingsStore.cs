@@ -51,6 +51,8 @@ namespace MoliWindowTiler
         [DataMember(Name = "targetProfiles", Order = 15)] public List<TargetProfile> TargetProfiles;
         [DataMember(Name = "activeTargetProfileId", Order = 16)] public string ActiveTargetProfileId;
         [DataMember(Name = "profileStates", Order = 17)] public List<TargetProfileState> ProfileStates;
+        [DataMember(Name = "cycleClientsModifiers", Order = 18)] public uint CycleClientsModifiers = HotkeyDefaults.CycleClientsModifiers;
+        [DataMember(Name = "cycleClientsKey", Order = 19)] public uint CycleClientsKey = HotkeyDefaults.CycleClientsKey;
     }
 
     internal sealed class SettingsStore
@@ -71,6 +73,8 @@ namespace MoliWindowTiler
                 bool hasTraySetting = json.IndexOf("\"minimizeToTray\"", StringComparison.OrdinalIgnoreCase) >= 0;
                 bool hasMinimizeAllModifiers = json.IndexOf("\"minimizeAllModifiers\"", StringComparison.OrdinalIgnoreCase) >= 0;
                 bool hasMinimizeAllKey = json.IndexOf("\"minimizeAllKey\"", StringComparison.OrdinalIgnoreCase) >= 0;
+                bool hasCycleClientsModifiers = json.IndexOf("\"cycleClientsModifiers\"", StringComparison.OrdinalIgnoreCase) >= 0;
+                bool hasCycleClientsKey = json.IndexOf("\"cycleClientsKey\"", StringComparison.OrdinalIgnoreCase) >= 0;
                 DataContractJsonSerializer serializer = new DataContractJsonSerializer(typeof(AppSettings));
                 using (MemoryStream stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json)))
                 {
@@ -79,6 +83,8 @@ namespace MoliWindowTiler
                     if (!hasTraySetting) settings.MinimizeToTray = true;
                     if (!hasMinimizeAllModifiers) settings.MinimizeAllModifiers = HotkeyDefaults.MinimizeAllModifiers;
                     if (!hasMinimizeAllKey) settings.MinimizeAllKey = HotkeyDefaults.MinimizeAllKey;
+                    if (!hasCycleClientsModifiers) settings.CycleClientsModifiers = HotkeyDefaults.CycleClientsModifiers;
+                    if (!hasCycleClientsKey) settings.CycleClientsKey = HotkeyDefaults.CycleClientsKey;
                     EnsureTargetProfiles(settings);
                     EnsureProfileStates(settings);
                     return settings;
@@ -108,6 +114,8 @@ namespace MoliWindowTiler
                 MinimizeToTray = true,
                 MinimizeAllModifiers = HotkeyDefaults.MinimizeAllModifiers,
                 MinimizeAllKey = HotkeyDefaults.MinimizeAllKey,
+                CycleClientsModifiers = HotkeyDefaults.CycleClientsModifiers,
+                CycleClientsKey = HotkeyDefaults.CycleClientsKey,
                 TargetProfiles = new List<TargetProfile> { TargetProfile.CreateMoliDefault() },
                 ActiveTargetProfileId = TargetProfile.MoliDefaultId,
                 ProfileStates = new List<TargetProfileState>

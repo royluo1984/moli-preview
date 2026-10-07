@@ -13,6 +13,7 @@ namespace MoliWindowTiler
         internal const uint ModControl = 0x0002;
         internal const uint ModShift = 0x0004;
         internal const uint ModWindows = 0x0008;
+        internal const uint ClientModifiers = ModControl;
         internal const uint MinimizeAllModifiers = ModControl | ModAlt;
         internal const uint MinimizeAllKey = (uint)Keys.Oem3;
         internal const uint CycleClientsModifiers = ModControl;
@@ -221,7 +222,7 @@ namespace MoliWindowTiler
             };
             root.Controls.Add(actions, 0, 2);
 
-            Button autoButton = new Button { Text = "为在线角色分配 Ctrl+Alt+数字", AutoSize = true, Height = 28 };
+            Button autoButton = new Button { Text = "为在线角色分配 Ctrl+数字", AutoSize = true, Height = 28 };
             autoButton.Click += delegate { AssignDefaultShortcuts(); };
             actions.Controls.Add(autoButton);
 
@@ -286,7 +287,7 @@ namespace MoliWindowTiler
                 Margin = new Padding(6)
             };
             foreach (HotkeyModifierChoice choice in ModifierChoices()) modifierBox.Items.Add(choice);
-            modifierBox.SelectedIndex = 0;
+            SelectModifier(modifierBox, HotkeyDefaults.ClientModifiers);
 
             ComboBox keyBox = new ComboBox
             {
@@ -312,11 +313,11 @@ namespace MoliWindowTiler
         {
             return new[]
             {
+                new HotkeyModifierChoice("Ctrl", ModControl),
                 new HotkeyModifierChoice("Ctrl + Alt", ModControl | ModAlt),
                 new HotkeyModifierChoice("Ctrl + Shift", ModControl | ModShift),
                 new HotkeyModifierChoice("Alt + Shift", ModAlt | ModShift),
                 new HotkeyModifierChoice("Ctrl + Alt + Shift", ModControl | ModAlt | ModShift),
-                new HotkeyModifierChoice("Ctrl", ModControl),
                 new HotkeyModifierChoice("Alt", ModAlt),
                 new HotkeyModifierChoice("Shift", ModShift),
                 new HotkeyModifierChoice("Win + Ctrl", ModWindows | ModControl),
@@ -397,7 +398,7 @@ namespace MoliWindowTiler
                 .Select(number => (Keys)((int)Keys.D0 + number % 10)));
             foreach (HotkeyRow row in rows.Where(row => row.Online))
             {
-                SelectModifier(row.ModifierBox, ModControl | ModAlt);
+                SelectModifier(row.ModifierBox, HotkeyDefaults.ClientModifiers);
                 SelectKey(row.KeyBox, available.Count > 0 ? available.Dequeue() : Keys.None);
             }
         }

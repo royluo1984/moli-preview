@@ -22,7 +22,7 @@ namespace MoliWindowTiler
         public override string ToString() { return Text; }
     }
 
-    internal sealed class TargetProfileEditorDialog : Form
+    internal sealed class TargetProfileEditorDialog : AdaptiveForm
     {
         private readonly TargetProfile profile;
         private readonly IList<WindowSample> samples;
@@ -53,31 +53,38 @@ namespace MoliWindowTiler
             this.samples = samples ?? new List<WindowSample>();
             Text = source == null ? "新增目标程序" : "编辑目标程序";
             StartPosition = FormStartPosition.CenterParent;
-            FormBorderStyle = FormBorderStyle.FixedDialog;
+            FormBorderStyle = FormBorderStyle.Sizable;
             MaximizeBox = false;
             MinimizeBox = false;
             ShowInTaskbar = false;
-            AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(640, 520);
+            SetInitialSize(new Size(680, 560));
             BuildControls();
             LoadProfile();
         }
 
         private void BuildControls()
         {
+            TableLayoutPanel frame = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Padding = new Padding(8) };
+            frame.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            frame.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            frame.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            Controls.Add(frame);
+            Panel viewport = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+            frame.Controls.Add(viewport, 0, 0);
             TableLayoutPanel root = new TableLayoutPanel
             {
-                Dock = DockStyle.Fill,
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 ColumnCount = 2,
-                RowCount = 11,
-                Padding = new Padding(12)
+                RowCount = 10,
+                Padding = new Padding(4)
             };
-            root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            for (int i = 0; i < 9; i++) root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
-            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            Controls.Add(root);
+            for (int i = 0; i < 9; i++) root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));
+            viewport.Controls.Add(root);
 
             AddLabel(root, "窗口样本", 0);
             sampleBox.DropDownStyle = ComboBoxStyle.DropDownList;
@@ -117,14 +124,14 @@ namespace MoliWindowTiler
             patternHint.Text = "正则可使用命名捕获组 (?<identity>...)；标题后缀适合“程序名--角色名”。";
             patternHint.Dock = DockStyle.Fill;
             patternHint.ForeColor = Color.DimGray;
-            patternHint.AutoEllipsis = true;
+            patternHint.AutoSize = true;
             root.Controls.Add(patternHint, 1, 7);
 
-            FlowLayoutPanel flags = new FlowLayoutPanel
+            WrappingPanel flags = new WrappingPanel
             {
                 Dock = DockStyle.Fill,
                 FlowDirection = FlowDirection.LeftToRight,
-                WrapContents = false
+                WrapContents = true
             };
             allowCloseBox.Text = "允许关闭全部客户端";
             allowCloseBox.AutoSize = true;
@@ -132,7 +139,7 @@ namespace MoliWindowTiler
             enabledBox.AutoSize = true;
             flags.Controls.Add(allowCloseBox);
             flags.Controls.Add(enabledBox);
-            root.Controls.Add(new Label { Text = "操作权限", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 8);
+            root.Controls.Add(new Label { Text = "操作权限", AutoSize = true, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 8);
             root.Controls.Add(flags, 1, 8);
 
             AddLabel(root, "识别测试", 9);
@@ -145,17 +152,17 @@ namespace MoliWindowTiler
             testResultBox.Text = "点击“测试识别”查看当前规则能匹配到的窗口。";
             root.Controls.Add(testResultBox, 1, 9);
 
-            FlowLayoutPanel actions = new FlowLayoutPanel
+            WrappingPanel actions = new WrappingPanel
             {
                 Dock = DockStyle.Fill,
                 FlowDirection = FlowDirection.RightToLeft,
-                WrapContents = false,
+                WrapContents = true,
                 Padding = new Padding(0, 4, 0, 0)
             };
-            Button cancel = new Button { Text = "取消", Width = 80, Height = 28, DialogResult = DialogResult.Cancel };
-            Button save = new Button { Text = "保存", Width = 80, Height = 28 };
-            Button read = new Button { Text = "读取选中样本", Width = 110, Height = 28 };
-            Button test = new Button { Text = "测试识别", Width = 90, Height = 28 };
+            Button cancel = UiSizing.Button("取消"); cancel.DialogResult = DialogResult.Cancel;
+            Button save = UiSizing.Button("保存");
+            Button read = UiSizing.Button("读取选中样本");
+            Button test = UiSizing.Button("测试识别");
             read.Click += delegate { ReadSelectedSample(); };
             test.Click += delegate { TestRecognition(); };
             save.Click += delegate { SaveAndClose(); };
@@ -163,8 +170,7 @@ namespace MoliWindowTiler
             actions.Controls.Add(save);
             actions.Controls.Add(test);
             actions.Controls.Add(read);
-            root.Controls.Add(actions, 0, 10);
-            root.SetColumnSpan(actions, 2);
+            frame.Controls.Add(actions, 0, 1);
             AcceptButton = save;
             CancelButton = cancel;
         }
@@ -174,6 +180,7 @@ namespace MoliWindowTiler
             root.Controls.Add(new Label
             {
                 Text = text,
+                AutoSize = true,
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleLeft,
                 ForeColor = Color.FromArgb(70, 78, 90)
@@ -357,7 +364,7 @@ namespace MoliWindowTiler
         }
     }
 
-    internal sealed class TargetProfileManagerDialog : Form
+    internal sealed class TargetProfileManagerDialog : AdaptiveForm
     {
         private readonly ListBox profileList = new ListBox();
         private readonly List<TargetProfile> profiles = new List<TargetProfile>();
@@ -375,11 +382,11 @@ namespace MoliWindowTiler
             SettingsStore.EnsureTargetProfiles(new AppSettings { TargetProfiles = profiles });
             Text = "目标程序管理";
             StartPosition = FormStartPosition.CenterParent;
-            FormBorderStyle = FormBorderStyle.FixedDialog;
+            FormBorderStyle = FormBorderStyle.Sizable;
             MaximizeBox = false;
             MinimizeBox = false;
             ShowInTaskbar = false;
-            ClientSize = new Size(600, 360);
+            SetInitialSize(new Size(600, 380));
             BuildControls();
             RefreshList();
         }
@@ -394,9 +401,9 @@ namespace MoliWindowTiler
                 Padding = new Padding(10)
             };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             Controls.Add(root);
 
             profileList.Dock = DockStyle.Fill;
@@ -406,6 +413,7 @@ namespace MoliWindowTiler
 
             FlowLayoutPanel editActions = new FlowLayoutPanel
             {
+                AutoSize = true,
                 Dock = DockStyle.Fill,
                 FlowDirection = FlowDirection.TopDown,
                 WrapContents = false,
@@ -419,14 +427,14 @@ namespace MoliWindowTiler
             editActions.Controls.Add(delete);
             root.Controls.Add(editActions, 1, 0);
 
-            FlowLayoutPanel bottom = new FlowLayoutPanel
+            WrappingPanel bottom = new WrappingPanel
             {
                 Dock = DockStyle.Fill,
                 FlowDirection = FlowDirection.RightToLeft,
-                WrapContents = false
+                WrapContents = true
             };
-            Button cancel = new Button { Text = "取消", Width = 78, Height = 28, DialogResult = DialogResult.Cancel };
-            Button save = new Button { Text = "保存", Width = 78, Height = 28 };
+            Button cancel = UiSizing.Button("取消"); cancel.DialogResult = DialogResult.Cancel;
+            Button save = UiSizing.Button("保存");
             save.Click += delegate { SaveAndClose(); };
             bottom.Controls.Add(cancel);
             bottom.Controls.Add(save);
@@ -438,7 +446,7 @@ namespace MoliWindowTiler
 
         private static Button MakeButton(string text, EventHandler handler)
         {
-            Button button = new Button { Text = text, Width = 94, Height = 30, Margin = new Padding(2, 2, 2, 6) };
+            Button button = UiSizing.Button(text);
             button.Click += handler;
             return button;
         }

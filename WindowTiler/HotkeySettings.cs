@@ -111,7 +111,7 @@ namespace MoliWindowTiler
         public override string ToString() { return Text; }
     }
 
-    internal sealed class HotkeySettingsDialog : Form
+    internal sealed class HotkeySettingsDialog : AdaptiveForm
     {
         private sealed class HotkeyRow
         {
@@ -148,13 +148,13 @@ namespace MoliWindowTiler
 
             Text = "客户端快捷键";
             StartPosition = FormStartPosition.CenterParent;
-            FormBorderStyle = FormBorderStyle.FixedDialog;
+            FormBorderStyle = FormBorderStyle.Sizable;
             MaximizeBox = false;
             MinimizeBox = false;
             ShowInTaskbar = false;
-            AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(720, Math.Max(260, Math.Min(600,
-                150 + Math.Max(games.Count, existing.Count) * 44)));
+
+            SetInitialSize(new Size(720, Math.Max(280, Math.Min(600,
+                150 + Math.Max(games.Count, existing.Count) * 44))));
 
             BuildControls();
         }
@@ -168,35 +168,39 @@ namespace MoliWindowTiler
                 RowCount = 3,
                 Padding = new Padding(10)
             };
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             Controls.Add(root);
 
             Label description = new Label
             {
                 Dock = DockStyle.Fill,
                 Text = "登录角色后设置快捷键，重启后仍按角色匹配。离线绑定会保留；不同身份可共用组合键，按下后会在对应在线客户端间轮换。",
-                AutoEllipsis = true,
+                AutoSize = true,
                 TextAlign = ContentAlignment.MiddleLeft
             };
             root.Controls.Add(description, 0, 0);
 
             TableLayoutPanel table = new TableLayoutPanel
             {
-                Dock = DockStyle.Fill,
-                AutoScroll = true,
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 ColumnCount = 4,
                 RowCount = 1,
                 CellBorderStyle = TableLayoutPanelCellBorderStyle.Single,
                 Padding = new Padding(0)
             };
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 80));
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180));
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 115));
-            table.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
-            root.Controls.Add(table, 0, 1);
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 12));
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 28));
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
+            table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            Panel listViewport = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+            listViewport.Controls.Add(table);
+            root.Controls.Add(listViewport, 0, 1);
 
             AddHeader(table, "客户端", 0, 0);
             AddHeader(table, "状态", 1, 0);
@@ -213,28 +217,28 @@ namespace MoliWindowTiler
                 if (!rows.Any(row => string.Equals(row.Identity, saved.Identity, StringComparison.OrdinalIgnoreCase)))
                     AddRow(table, saved.Identity, false, saved);
 
-            FlowLayoutPanel actions = new FlowLayoutPanel
+            WrappingPanel actions = new WrappingPanel
             {
                 Dock = DockStyle.Fill,
                 FlowDirection = FlowDirection.LeftToRight,
-                WrapContents = false,
+                WrapContents = true,
                 Padding = new Padding(0, 5, 0, 0)
             };
             root.Controls.Add(actions, 0, 2);
 
-            Button autoButton = new Button { Text = "为在线角色分配 Ctrl+数字", AutoSize = true, Height = 28 };
+            Button autoButton = UiSizing.Button("为在线角色分配 Ctrl+数字");
             autoButton.Click += delegate { AssignDefaultShortcuts(); };
             actions.Controls.Add(autoButton);
 
-            Button clearButton = new Button { Text = "清除全部", Width = 78, Height = 28 };
+            Button clearButton = UiSizing.Button("清除全部");
             clearButton.Click += delegate { ClearShortcuts(); };
             actions.Controls.Add(clearButton);
 
-            Button okButton = new Button { Text = "保存", Width = 76, Height = 28, DialogResult = DialogResult.None };
+            Button okButton = new Button { Text = "保存", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(10, 4, 10, 4), MinimumSize = new Size(58, 0), DialogResult = DialogResult.None };
             okButton.Click += delegate { SaveAndClose(); };
             actions.Controls.Add(okButton);
 
-            Button cancelButton = new Button { Text = "取消", Width = 76, Height = 28, DialogResult = DialogResult.Cancel };
+            Button cancelButton = new Button { Text = "取消", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(10, 4, 10, 4), MinimumSize = new Size(58, 0), DialogResult = DialogResult.Cancel };
             actions.Controls.Add(cancelButton);
             AcceptButton = okButton;
             CancelButton = cancelButton;
@@ -245,6 +249,7 @@ namespace MoliWindowTiler
             Label label = new Label
             {
                 Text = text,
+                AutoSize = true,
                 Dock = DockStyle.Fill,
                 Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold),
                 TextAlign = ContentAlignment.MiddleCenter,
@@ -258,12 +263,12 @@ namespace MoliWindowTiler
             if (string.IsNullOrWhiteSpace(identity) || rows.Any(existingRow =>
                 string.Equals(existingRow.Identity, identity, StringComparison.OrdinalIgnoreCase))) return;
             int row = table.RowCount++;
-            table.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+            table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             Label clientLabel = new Label
             {
                 Text = identity,
                 Dock = DockStyle.Fill,
-                AutoEllipsis = true,
+                AutoSize = true,
                 TextAlign = ContentAlignment.MiddleLeft,
                 Padding = new Padding(8, 0, 4, 0)
             };
@@ -273,7 +278,7 @@ namespace MoliWindowTiler
             {
                 Text = online ? "在线" : "离线",
                 Dock = DockStyle.Fill,
-                AutoEllipsis = true,
+                AutoSize = true,
                 TextAlign = ContentAlignment.MiddleLeft,
                 Padding = new Padding(4, 0, 4, 0),
                 ForeColor = Color.DimGray
@@ -442,7 +447,7 @@ namespace MoliWindowTiler
         }
     }
 
-    internal sealed class GlobalHotkeySettingsDialog : Form
+    internal sealed class GlobalHotkeySettingsDialog : AdaptiveForm
     {
         private readonly ComboBox modifierBox = new ComboBox();
         private readonly ComboBox keyBox = new ComboBox();
@@ -468,12 +473,12 @@ namespace MoliWindowTiler
             this.descriptionText = descriptionText;
             Text = title;
             StartPosition = FormStartPosition.CenterParent;
-            FormBorderStyle = FormBorderStyle.FixedDialog;
+            FormBorderStyle = FormBorderStyle.Sizable;
             MaximizeBox = false;
             MinimizeBox = false;
             ShowInTaskbar = false;
-            AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(430, 190);
+
+            SetInitialSize(new Size(460, 260));
             BuildControls();
         }
 
@@ -486,20 +491,20 @@ namespace MoliWindowTiler
                 RowCount = 5,
                 Padding = new Padding(12)
             };
-            root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             Controls.Add(root);
 
             Label description = new Label
             {
                 Text = descriptionText,
                 Dock = DockStyle.Fill,
-                AutoEllipsis = true,
+                AutoSize = true,
                 TextAlign = ContentAlignment.MiddleLeft
             };
             root.Controls.Add(description, 0, 0);
@@ -508,6 +513,7 @@ namespace MoliWindowTiler
             root.Controls.Add(new Label
             {
                 Text = "组合键",
+                AutoSize = true,
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleLeft
             }, 0, 1);
@@ -521,6 +527,7 @@ namespace MoliWindowTiler
             root.Controls.Add(new Label
             {
                 Text = "按键",
+                AutoSize = true,
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleLeft
             }, 0, 2);
@@ -532,22 +539,24 @@ namespace MoliWindowTiler
             root.Controls.Add(keyBox, 1, 2);
 
             previewLabel.Dock = DockStyle.Fill;
+            previewLabel.AutoSize = true;
             previewLabel.ForeColor = Color.FromArgb(70, 78, 90);
             previewLabel.TextAlign = ContentAlignment.MiddleLeft;
             root.Controls.Add(previewLabel, 0, 3);
             root.SetColumnSpan(previewLabel, 2);
 
-            FlowLayoutPanel actions = new FlowLayoutPanel
+            WrappingPanel actions = new WrappingPanel
             {
                 Dock = DockStyle.Fill,
                 FlowDirection = FlowDirection.RightToLeft,
-                WrapContents = false
+                WrapContents = true
             };
             root.Controls.Add(actions, 0, 4);
-            Button okButton = new Button { Text = "保存", Width = 76, Height = 28 };
+            root.SetColumnSpan(actions, 2);
+            Button okButton = UiSizing.Button("保存");
             okButton.Click += delegate { SaveAndClose(); };
-            Button cancelButton = new Button { Text = "取消", Width = 76, Height = 28, DialogResult = DialogResult.Cancel };
-            Button defaultButton = new Button { Text = "恢复默认", Width = 82, Height = 28 };
+            Button cancelButton = new Button { Text = "取消", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(10, 4, 10, 4), MinimumSize = new Size(58, 0), DialogResult = DialogResult.Cancel };
+            Button defaultButton = UiSizing.Button("恢复默认");
             defaultButton.Click += delegate
             {
                 HotkeySettingsDialog.SelectModifier(modifierBox, defaultModifiers);

@@ -44,6 +44,7 @@ namespace MoliWindowTiler
         public PreviewPanel()
         {
             DoubleBuffered = true;
+            SetStyle(ControlStyles.ResizeRedraw, true);
             BackColor = Color.FromArgb(245, 247, 250);
             BorderStyle = BorderStyle.FixedSingle;
         }
@@ -68,22 +69,25 @@ namespace MoliWindowTiler
                 if (plan == null || windows == null || windows.Count == 0)
                 {
                     string empty = "刷新后选择游戏窗口，右侧会显示排列预览";
-                    SizeF measured = g.MeasureString(empty, Font);
-                    g.DrawString(empty, Font, textBrush,
-                        Math.Max(8, (ClientSize.Width - measured.Width) / 2),
-                        Math.Max(8, (ClientSize.Height - measured.Height) / 2));
+                    Rectangle emptyArea = ClientRectangle;
+                    emptyArea.Inflate(-UiSizing.Unit(this, 8), -UiSizing.Unit(this, 8));
+                    TextRenderer.DrawText(g, empty, Font, emptyArea, Color.FromArgb(70, 78, 90),
+                        TextFormatFlags.WordBreak | TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
                     return;
                 }
 
-                int margin = 18;
+                int margin = UiSizing.Unit(this, 12);
+                int headingHeight = Font.Height * 3 + UiSizing.Unit(this, 8);
+                if (ClientSize.Width <= margin * 2 || ClientSize.Height <= headingHeight + margin * 2) return;
                 float scale = Math.Min(
                     (ClientSize.Width - margin * 2f) / Math.Max(1, area.Width),
-                    (ClientSize.Height - margin * 2f - 26) / Math.Max(1, area.Height));
-                scale = Math.Max(0.03f, scale);
+                    (ClientSize.Height - margin * 2f - headingHeight) / Math.Max(1, area.Height));
+                scale = Math.Max(0.001f, scale);
                 float left = (ClientSize.Width - area.Width * scale) / 2f;
-                float top = 26 + (ClientSize.Height - 26 - area.Height * scale) / 2f;
-                g.DrawString("工作区 " + area.Width + "×" + area.Height + "　当前客户端 " + clientSize.Width + "×" + clientSize.Height,
-                    titleFont, textBrush, 10, 7);
+                float top = headingHeight + (ClientSize.Height - headingHeight - area.Height * scale) / 2f;
+                TextRenderer.DrawText(g, "工作区 " + area.Width + "×" + area.Height + "　当前客户端 " + clientSize.Width + "×" + clientSize.Height,
+                    titleFont, new Rectangle(margin, UiSizing.Unit(this, 4), Math.Max(1, ClientSize.Width - margin * 2), headingHeight),
+                    Color.FromArgb(70, 78, 90), TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis);
                 using (Pen areaPen = new Pen(Color.FromArgb(160, 170, 184)))
                 using (Brush areaBrush = new SolidBrush(Color.White))
                 {
@@ -103,7 +107,7 @@ namespace MoliWindowTiler
                         top + (r.Top - area.Top) * scale,
                         Math.Max(2, r.Width * scale), Math.Max(2, r.Height * scale));
                     using (Brush fill = new SolidBrush(Color.FromArgb(185, colors[i % colors.Length])))
-                    using (Pen border = new Pen(colors[i % colors.Length], 1.5f))
+                    using (Pen border = new Pen(colors[i % colors.Length], Math.Max(1, UiSizing.Unit(this, 1))))
                     {
                         g.FillRectangle(fill, draw);
                         g.DrawRectangle(border, draw.X, draw.Y, draw.Width, draw.Height);
@@ -111,8 +115,9 @@ namespace MoliWindowTiler
                     string label = (i + 1) + "  " + (i < windows.Count ? ShortTitle(windows[i].Title) : "游戏窗口");
                     using (Brush labelBrush = new SolidBrush(Color.White))
                     {
-                        RectangleF labelArea = new RectangleF(draw.X + 4, draw.Y + 4,
-                            Math.Max(2, draw.Width - 8), Math.Max(2, draw.Height - 8));
+                        float inset = UiSizing.Unit(this, 4);
+                        RectangleF labelArea = new RectangleF(draw.X + inset, draw.Y + inset,
+                            Math.Max(2, draw.Width - inset * 2), Math.Max(2, draw.Height - inset * 2));
                         g.DrawString(label, Font, labelBrush, labelArea);
                     }
                 }
@@ -127,7 +132,7 @@ namespace MoliWindowTiler
         }
     }
 
-    public sealed class MainForm : Form
+    public sealed class MainForm : AdaptiveForm
     {
         private readonly ListView windowList = new ListView();
         private readonly ComboBox monitorBox = new ComboBox();
@@ -201,8 +206,8 @@ namespace MoliWindowTiler
             switcher.OrderChanged += HandleSwitcherOrderChanged;
             Text = Program.MainWindowTitle;
             StartPosition = FormStartPosition.CenterScreen;
-            MinimumSize = new Size(940, 620);
-            ClientSize = new Size(1180, 760);
+
+            SetInitialSize(new Size(1180, 760));
             Icon = SystemIcons.Application;
             BuildControls();
             InitializeTray();
@@ -225,324 +230,225 @@ namespace MoliWindowTiler
             if (IsHandleCreated) RegisterClientHotkeys();
         }
 
+        private TableLayoutPanel uiRoot, settingsContent, wideBody, footer;
+        private Panel settingsViewport, mainViewport;
+        private GroupBox clientsGroup, layoutGroup;
+        private TabControl compactBody;
+        private TabPage clientsTab, layoutTab;
+        private bool updatingUi;
+
         private void BuildControls()
         {
             BackColor = Color.FromArgb(238, 242, 247);
-            TableLayoutPanel root = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 3,
-                Padding = new Padding(10),
-                BackColor = BackColor
-            };
-            // Keep enough vertical room for the feature controls to wrap on
-            // narrower screens instead of hiding the rightmost options.
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 206));
-            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
-            Controls.Add(root);
+            mainViewport = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+            Controls.Add(mainViewport);
+            uiRoot = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 1, RowCount = 3,
+                Padding = new Padding(10), BackColor = BackColor };
+            uiRoot.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            uiRoot.RowStyles.Add(new RowStyle(SizeType.Absolute, 190));
+            uiRoot.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            uiRoot.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            mainViewport.Controls.Add(uiRoot);
 
-            GroupBox options = new GroupBox
-            {
-                Text = "排列设置",
-                Dock = DockStyle.Fill,
-                Padding = new Padding(10, 22, 10, 8),
-                BackColor = Color.White
-            };
-            root.Controls.Add(options, 0, 0);
+            GroupBox options = new GroupBox { Text = "排列设置", Dock = DockStyle.Fill,
+                Padding = new Padding(8, 8, 8, 8), BackColor = Color.White };
+            uiRoot.Controls.Add(options, 0, 0);
+            settingsViewport = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+            options.Controls.Add(settingsViewport);
+            settingsContent = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 1, RowCount = 3, Margin = Padding.Empty };
+            settingsContent.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            for (int i = 0; i < 3; i++) settingsContent.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            settingsViewport.Controls.Add(settingsContent);
+            SettingsGrid settings = new SettingsGrid();
+            settingsContent.Controls.Add(settings, 0, 0);
 
-            TableLayoutPanel settings = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 8,
-                RowCount = 3,
-                BackColor = Color.White,
-                Padding = new Padding(0)
-            };
-            settings.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72));
-            settings.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 26));
-            settings.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72));
-            settings.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 19));
-            settings.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72));
-            settings.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 16));
-            settings.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72));
-            settings.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
-            settings.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-            settings.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-            settings.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            options.Controls.Add(settings);
-
-            ConfigureCombo(monitorBox, 190);
+            ConfigureCombo(monitorBox);
             monitorBox.SelectedIndexChanged += delegate { SaveSettings(); UpdatePlan(); };
-            AddSettingLabel(settings, "目标屏幕", 0, 0);
-            settings.Controls.Add(monitorBox, 1, 0);
-
-            ConfigureCombo(columnsBox, 132);
+            settings.Controls.Add(SettingField("目标屏幕", monitorBox));
+            ConfigureCombo(columnsBox);
             columnsBox.Items.AddRange(new object[] { "智能排列", "一行横排", "一列竖排", "两行均匀", "三行均匀", "自定义组合" });
             columnsBox.SelectedIndex = 0;
             columnsBox.SelectedIndexChanged += delegate
             {
                 customRowsBox.Enabled = columnsBox.SelectedIndex == 5;
-                SaveSettings();
-                UpdatePlan();
+                SaveSettings(); UpdatePlan();
             };
-            AddSettingLabel(settings, "排列方式", 2, 0);
-            settings.Controls.Add(columnsBox, 3, 0);
-
+            settings.Controls.Add(SettingField("排列方式", columnsBox));
             customRowsBox.Text = "3,3";
-            customRowsBox.Dock = DockStyle.Fill;
             customRowsBox.Enabled = false;
-            customRowsBox.Margin = new Padding(3, 5, 3, 5);
-            customRowsBox.TextChanged += delegate
-            {
-                SaveSettings();
-                if (columnsBox.SelectedIndex == 5) UpdatePlan();
-            };
-            AddSettingLabel(settings, "行组合", 4, 0);
-            settings.Controls.Add(customRowsBox, 5, 0);
-            Label rowsHint = new Label { Text = "例：3,3 / 2,2,2", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.DimGray };
-            settings.Controls.Add(rowsHint, 6, 0);
-            settings.SetColumnSpan(rowsHint, 2);
-
-            ConfigureCombo(alignmentBox, 96);
+            customRowsBox.TextChanged += delegate { SaveSettings(); if (columnsBox.SelectedIndex == 5) UpdatePlan(); };
+            settings.Controls.Add(SettingField("行组合", customRowsBox));
+            ConfigureCombo(alignmentBox);
             alignmentBox.Items.AddRange(new object[] { "左上", "上中", "右上", "左中", "居中", "右中", "左下", "下中", "右下" });
             alignmentBox.SelectedIndex = (int)LayoutAlignment.Center;
             alignmentBox.SelectedIndexChanged += delegate { SaveSettings(); UpdatePlan(); };
-            AddSettingLabel(settings, "对齐方式", 0, 1);
-            settings.Controls.Add(alignmentBox, 1, 1);
-
-            ConfigureNumber(gapBox, 300, 0, 54);
+            settings.Controls.Add(SettingField("对齐方式", alignmentBox));
+            gapBox.Maximum = 300;
             gapBox.ValueChanged += delegate { SaveSettings(); UpdatePlan(); };
-            AddSettingLabel(settings, "窗口间距", 2, 1);
-            settings.Controls.Add(gapBox, 3, 1);
-
-            ConfigureNumber(marginBox, 80, 8, 54);
+            settings.Controls.Add(SettingField("窗口间距", gapBox));
+            marginBox.Maximum = 80; marginBox.Value = 8;
             marginBox.ValueChanged += delegate { SaveSettings(); UpdatePlan(); };
-            AddSettingLabel(settings, "屏幕边距", 4, 1);
-            settings.Controls.Add(marginBox, 5, 1);
-            Label preserveLabel = new Label { Text = "只移动位置，不改分辨率", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.FromArgb(48, 110, 72) };
-            settings.Controls.Add(preserveLabel, 6, 1);
-            settings.SetColumnSpan(preserveLabel, 2);
+            settings.Controls.Add(SettingField("屏幕边距", marginBox));
 
-            FlowLayoutPanel features = new FlowLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                FlowDirection = FlowDirection.LeftToRight,
-                WrapContents = true,
-                AutoScroll = false,
-                Padding = new Padding(0, 2, 0, 0)
-            };
-            settings.Controls.Add(features, 0, 2);
-            settings.SetColumnSpan(features, 8);
-            Label targetProfileLabel = new Label
-            {
-                Text = "目标程序",
-                AutoSize = true,
-                Margin = new Padding(2, 7, 3, 0),
-                ForeColor = Color.FromArgb(70, 78, 90)
-            };
-            features.Controls.Add(targetProfileLabel);
-            targetProfileBox.DropDownStyle = ComboBoxStyle.DropDownList;
-            targetProfileBox.Width = 150;
-            targetProfileBox.Height = 27;
-            targetProfileBox.Margin = new Padding(2, 2, 4, 0);
+            WrappingPanel features = new WrappingPanel();
+            settingsContent.Controls.Add(features, 0, 1);
+            ConfigureCombo(targetProfileBox);
+            targetProfileBox.MinimumSize = new Size(150, 0);
             targetProfileBox.SelectedIndexChanged += delegate { TargetProfileSelectionChanged(); };
-            features.Controls.Add(targetProfileBox);
-            manageProfilesButton.Text = "管理目标程序";
-            manageProfilesButton.Width = 100;
-            manageProfilesButton.Height = 27;
-            manageProfilesButton.Margin = new Padding(2, 2, 12, 0);
+            TableLayoutPanel targetField = SettingField("目标程序", targetProfileBox);
+            targetField.Dock = DockStyle.None;
+            features.Controls.Add(targetField);
+            UiSizing.ConfigureButton(manageProfilesButton, "管理目标程序");
             manageProfilesButton.Click += delegate { ManageTargetProfiles(); };
             features.Controls.Add(manageProfilesButton);
-            switcherBox.Text = "显示点击切换浮层";
-            switcherBox.Checked = true;
-            switcherBox.AutoSize = true;
-            switcherBox.Margin = new Padding(2, 5, 18, 0);
+            switcherBox.Text = "显示点击切换浮层"; switcherBox.AutoSize = true; switcherBox.Checked = true;
+            switcherBox.Margin = new Padding(6, 8, 6, 4);
             switcherBox.CheckedChanged += delegate { SaveSettings(); UpdateSwitcher(); };
             features.Controls.Add(switcherBox);
-            trayBox.Text = "最小化到托盘";
-            trayBox.Checked = true;
-            trayBox.AutoSize = true;
-            trayBox.Margin = new Padding(2, 5, 18, 0);
+            trayBox.Text = "最小化到托盘"; trayBox.AutoSize = true; trayBox.Checked = true;
+            trayBox.Margin = new Padding(6, 8, 6, 4);
             trayBox.CheckedChanged += delegate { SaveSettings(); };
             features.Controls.Add(trayBox);
-            hotkeyButton.Text = "设置客户端快捷键";
-            hotkeyButton.Width = 138;
-            hotkeyButton.Height = 27;
-            hotkeyButton.Margin = new Padding(2, 2, 3, 0);
+
+            WrappingPanel shortcuts = new WrappingPanel();
+            settingsContent.Controls.Add(shortcuts, 0, 2);
+            UiSizing.ConfigureButton(hotkeyButton, "设置客户端快捷键");
             hotkeyButton.Click += delegate { ConfigureClientHotkeys(); };
-            features.Controls.Add(hotkeyButton);
-            minimizeHotkeyButton.Width = 190;
-            minimizeHotkeyButton.Height = 27;
-            minimizeHotkeyButton.Margin = new Padding(2, 2, 3, 0);
+            shortcuts.Controls.Add(hotkeyButton);
+            UiSizing.ConfigureButton(minimizeHotkeyButton, "");
             minimizeHotkeyButton.Click += delegate { ConfigureMinimizeAllHotkey(); };
-            features.Controls.Add(minimizeHotkeyButton);
+            shortcuts.Controls.Add(minimizeHotkeyButton);
             UpdateMinimizeHotkeyButtonText();
-            cycleHotkeyButton.Width = 178;
-            cycleHotkeyButton.Height = 27;
-            cycleHotkeyButton.Margin = new Padding(2, 2, 3, 0);
+            UiSizing.ConfigureButton(cycleHotkeyButton, "");
             cycleHotkeyButton.Click += delegate { ConfigureCycleClientsHotkey(); };
-            features.Controls.Add(cycleHotkeyButton);
+            shortcuts.Controls.Add(cycleHotkeyButton);
             UpdateCycleHotkeyButtonText();
 
-            TableLayoutPanel body = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 2,
-                RowCount = 1,
-                BackColor = BackColor,
-                Padding = new Padding(0, 8, 0, 8)
-            };
-            body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
-            body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
-            root.Controls.Add(body, 0, 1);
-
-            GroupBox windowsGroup = new GroupBox
-            {
-                Text = "客户端列表（勾选要排列的窗口）",
-                Dock = DockStyle.Fill,
-                Padding = new Padding(8, 22, 8, 8),
-                BackColor = Color.White,
-                Margin = new Padding(0, 0, 6, 0)
-            };
-            body.Controls.Add(windowsGroup, 0, 0);
+            Panel workspace = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 6, 0, 6) };
+            uiRoot.Controls.Add(workspace, 0, 1);
+            wideBody = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
+            wideBody.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
+            wideBody.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
+            wideBody.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            compactBody = new TabControl { Dock = DockStyle.Fill, Visible = false };
+            clientsTab = new TabPage("客户端列表"); layoutTab = new TabPage("排列预览");
+            compactBody.TabPages.Add(clientsTab); compactBody.TabPages.Add(layoutTab);
+            workspace.Controls.Add(wideBody); workspace.Controls.Add(compactBody);
+            clientsGroup = new GroupBox { Text = "客户端列表（勾选要排列的窗口）", Dock = DockStyle.Fill,
+                Padding = new Padding(6), BackColor = Color.White, Margin = Padding.Empty };
+            wideBody.Controls.Add(clientsGroup, 0, 0);
             windowList.Dock = DockStyle.Fill;
-            windowList.CheckBoxes = true;
-            windowList.FullRowSelect = true;
-            windowList.GridLines = false;
-            windowList.MultiSelect = false;
-            windowList.View = View.Details;
-            windowList.HideSelection = false;
+            windowList.CheckBoxes = true; windowList.FullRowSelect = true; windowList.GridLines = false;
+            windowList.MultiSelect = false; windowList.View = View.Details; windowList.HideSelection = false;
             windowList.BackColor = Color.White;
-            windowList.Columns.Add("PID", 52);
-            windowList.Columns.Add("人物", 108);
-            windowList.Columns.Add("快捷键", 86);
-            windowList.Columns.Add("线程", 56);
-            windowList.Columns.Add("客户端标题", 142);
-            windowList.Columns.Add("分辨率", 78);
-            windowList.Columns.Add("状态", 58);
-            windowList.Columns.Add("位置", 104);
-            windowList.ItemChecked += delegate
-            {
-                if (refreshingWindows) return;
-                UpdatePlan();
-            };
-            windowsGroup.Controls.Add(windowList);
-
-            GroupBox previewGroup = new GroupBox
-            {
-                Text = "排列预览",
-                Dock = DockStyle.Fill,
-                Padding = new Padding(8, 22, 8, 8),
-                BackColor = Color.White,
-                Margin = new Padding(6, 0, 0, 0)
-            };
-            body.Controls.Add(previewGroup, 1, 0);
-            planLabel.AutoSize = false;
-            planLabel.Dock = DockStyle.Bottom;
-            planLabel.Height = 44;
-            planLabel.TextAlign = ContentAlignment.MiddleLeft;
-            planLabel.Padding = new Padding(7, 2, 7, 2);
+            windowList.Columns.Add("PID", 52); windowList.Columns.Add("人物", 108);
+            windowList.Columns.Add("快捷键", 86); windowList.Columns.Add("线程", 56);
+            windowList.Columns.Add("客户端标题", 142); windowList.Columns.Add("分辨率", 78);
+            windowList.Columns.Add("状态", 58); windowList.Columns.Add("位置", 104);
+            windowList.ItemChecked += delegate { if (!refreshingWindows) UpdatePlan(); };
+            clientsGroup.Controls.Add(windowList);
+            layoutGroup = new GroupBox { Text = "排列预览", Dock = DockStyle.Fill,
+                Padding = new Padding(6), BackColor = Color.White, Margin = Padding.Empty };
+            wideBody.Controls.Add(layoutGroup, 1, 0);
+            TableLayoutPanel previewLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
+            previewLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            previewLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            previewLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layoutGroup.Controls.Add(previewLayout);
+            preview.Dock = DockStyle.Fill; previewLayout.Controls.Add(preview, 0, 0);
+            planLabel.AutoSize = true; planLabel.Dock = DockStyle.Fill;
+            planLabel.Padding = new Padding(6, 4, 6, 4);
             planLabel.ForeColor = Color.FromArgb(70, 78, 90);
             planLabel.BackColor = Color.FromArgb(247, 249, 252);
-            previewGroup.Controls.Add(planLabel);
-            preview.Dock = DockStyle.Fill;
-            previewGroup.Controls.Add(preview);
+            previewLayout.Controls.Add(planLabel, 0, 1);
 
-            TableLayoutPanel actionBar = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 2,
-                RowCount = 1,
-                BackColor = Color.White,
-                Padding = new Padding(8, 5, 8, 5)
-            };
-            actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 63));
-            actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 37));
-            root.Controls.Add(actionBar, 0, 2);
-            FlowLayoutPanel actions = new FlowLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                FlowDirection = FlowDirection.LeftToRight,
-                WrapContents = false,
-                AutoScroll = true,
-                Padding = new Padding(0)
-            };
-            actionBar.Controls.Add(actions, 0, 0);
-            ConfigureButton(refreshButton, "刷新窗口", 84, false);
-            refreshButton.Click += delegate { RefreshWindows(); };
-            actions.Controls.Add(refreshButton);
-            ConfigureButton(selectAllButton, "全选", 58, false);
-            selectAllButton.Click += delegate { SetAllChecked(true); };
-            actions.Controls.Add(selectAllButton);
-            ConfigureButton(clearButton, "清空选择", 78, false);
-            clearButton.Click += delegate { SetAllChecked(false); };
-            actions.Controls.Add(clearButton);
-            ConfigureButton(arrangeButton, "一键排列", 100, true);
-            arrangeButton.Click += delegate { ArrangeWindows(); };
-            actions.Controls.Add(arrangeButton);
-            ConfigureButton(restoreButton, "恢复原位置", 92, false);
-            restoreButton.Click += delegate { RestoreWindows(); };
-            actions.Controls.Add(restoreButton);
-            ConfigureButton(closeAllButton, "关闭所有客户端", 122, false);
-            closeAllButton.ForeColor = Color.DarkRed;
-            closeAllButton.Enabled = false;
-            closeAllButton.Click += delegate { CloseAllClients(); };
-            actions.Controls.Add(closeAllButton);
-
-            statusLabel.Dock = DockStyle.Fill;
-            statusLabel.AutoEllipsis = true;
-            statusLabel.TextAlign = ContentAlignment.MiddleRight;
-            statusLabel.Padding = new Padding(8, 0, 4, 0);
-            statusLabel.ForeColor = Color.FromArgb(74, 85, 104);
-            actionBar.Controls.Add(statusLabel, 1, 0);
+            footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true,
+                ColumnCount = 1, RowCount = 2, BackColor = Color.White, Padding = new Padding(4) };
+            footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            footer.RowStyles.Add(new RowStyle(SizeType.AutoSize)); footer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            uiRoot.Controls.Add(footer, 0, 2);
+            WrappingPanel actions = new WrappingPanel(); footer.Controls.Add(actions, 0, 0);
+            ConfigureButton(refreshButton, "刷新窗口", false); refreshButton.Click += delegate { RefreshWindows(); }; actions.Controls.Add(refreshButton);
+            ConfigureButton(selectAllButton, "全选", false); selectAllButton.Click += delegate { SetAllChecked(true); }; actions.Controls.Add(selectAllButton);
+            ConfigureButton(clearButton, "清空选择", false); clearButton.Click += delegate { SetAllChecked(false); }; actions.Controls.Add(clearButton);
+            ConfigureButton(arrangeButton, "一键排列", true); arrangeButton.Click += delegate { ArrangeWindows(); }; actions.Controls.Add(arrangeButton);
+            ConfigureButton(restoreButton, "恢复原位置", false); restoreButton.Click += delegate { RestoreWindows(); }; actions.Controls.Add(restoreButton);
+            ConfigureButton(closeAllButton, "关闭所有客户端", false); closeAllButton.ForeColor = Color.DarkRed;
+            closeAllButton.Enabled = false; closeAllButton.Click += delegate { CloseAllClients(); }; actions.Controls.Add(closeAllButton);
+            statusLabel.AutoSize = true; statusLabel.Dock = DockStyle.Fill;
+            statusLabel.Padding = new Padding(4); statusLabel.ForeColor = Color.FromArgb(74, 85, 104);
+            footer.Controls.Add(statusLabel, 0, 1);
+            ClientSizeChanged += delegate { UpdateAdaptiveLayout(); };
+            mainViewport.ClientSizeChanged += delegate { UpdateAdaptiveLayout(); };
+            settingsContent.SizeChanged += delegate { UpdateAdaptiveLayout(); };
+            footer.SizeChanged += delegate { UpdateAdaptiveLayout(); };
+            UpdateAdaptiveLayout();
         }
 
-        private static void AddSettingLabel(TableLayoutPanel table, string text, int column, int row)
+        private static TableLayoutPanel SettingField(string label, Control input)
         {
-            table.Controls.Add(new Label
+            TableLayoutPanel field = new TableLayoutPanel { ColumnCount = 2, RowCount = 1,
+                Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = new Padding(3, 2, 6, 2) };
+            field.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            field.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            field.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            field.Controls.Add(new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left,
+                Margin = new Padding(0, 4, 8, 4), ForeColor = Color.FromArgb(70, 78, 90) }, 0, 0);
+            input.Dock = DockStyle.Fill; input.MinimumSize = new Size(100, 0); input.Margin = new Padding(0, 3, 0, 3);
+            field.Controls.Add(input, 1, 0);
+            return field;
+        }
+
+        private static void ConfigureCombo(ComboBox box) { box.DropDownStyle = ComboBoxStyle.DropDownList; }
+
+        private static void ConfigureButton(Button button, string text, bool primary)
+        {
+            UiSizing.ConfigureButton(button, text);
+            if (primary) { button.Font = new Font(button.Font, FontStyle.Bold); button.BackColor = Color.FromArgb(44, 115, 200); button.ForeColor = Color.White; }
+        }
+
+        protected override void OnUiScaleChanged()
+        {
+            base.OnUiScaleChanged();
+            int[] widths = { 52, 108, 86, 56, 142, 78, 58, 104 };
+            for (int i = 0; i < Math.Min(widths.Length, windowList.Columns.Count); i++)
+                windowList.Columns[i].Width = UiSizing.Unit(this, widths[i]);
+            if (trayMenu != null) trayMenu.Font = Font;
+            UpdateAdaptiveLayout();
+        }
+
+        private void UpdateAdaptiveLayout()
+        {
+            if (updatingUi || ApplyingUiScale || compactBody == null || IsDisposed || Disposing) return;
+            updatingUi = true;
+            try
             {
-                Text = text,
-                Dock = DockStyle.Fill,
-                TextAlign = ContentAlignment.MiddleLeft,
-                ForeColor = Color.FromArgb(70, 78, 90),
-                Padding = new Padding(2, 0, 2, 0)
-            }, column, row);
-        }
-
-        private static void ConfigureCombo(ComboBox box, int width)
-        {
-            box.DropDownStyle = ComboBoxStyle.DropDownList;
-            box.Width = width;
-            box.Dock = DockStyle.Fill;
-            box.Margin = new Padding(3, 5, 3, 5);
-        }
-
-        private static void ConfigureNumber(NumericUpDown box, int maximum, int value, int width)
-        {
-            box.Minimum = 0;
-            box.Maximum = maximum;
-            box.Value = value;
-            box.Width = width;
-            box.Dock = DockStyle.Left;
-            box.Margin = new Padding(3, 5, 3, 5);
-        }
-
-        private static void ConfigureButton(Button button, string text, int width, bool primary)
-        {
-            button.Text = text;
-            button.Width = width;
-            button.Height = 30;
-            button.Margin = new Padding(3, 0, 3, 0);
-            button.FlatStyle = FlatStyle.Standard;
-            if (primary)
-            {
-                button.Font = new Font(button.Font, FontStyle.Bold);
-                button.BackColor = Color.FromArgb(44, 115, 200);
-                button.ForeColor = Color.White;
+                bool compact = ClientSize.Width < UiSizing.Unit(this, 980);
+                if (compact && clientsGroup.Parent != clientsTab)
+                {
+                    clientsTab.Controls.Add(clientsGroup); layoutTab.Controls.Add(layoutGroup);
+                    wideBody.Visible = false; compactBody.Visible = true; compactBody.BringToFront();
+                }
+                else if (!compact && clientsGroup.Parent != wideBody)
+                {
+                    wideBody.Controls.Add(clientsGroup, 0, 0); wideBody.Controls.Add(layoutGroup, 1, 0);
+                    compactBody.Visible = false; wideBody.Visible = true; wideBody.BringToFront();
+                }
+                int preferred = settingsContent.GetPreferredSize(new Size(Math.Max(1, settingsViewport.ClientSize.Width), 0)).Height;
+                int available = Math.Max(UiSizing.Unit(this, 60), (int)(ClientSize.Height * 0.43));
+                uiRoot.RowStyles[0].Height = Math.Min(preferred + Font.Height + UiSizing.Unit(this, 24), available);
+                // A separate viewport gives the percent-height workspace real
+                // layout space even when the whole page needs to scroll.
+                int contentWidth = Math.Max(1, mainViewport.ClientSize.Width - uiRoot.Padding.Horizontal - footer.Margin.Horizontal);
+                int footerHeight = footer.GetPreferredSize(new Size(contentWidth, 0)).Height;
+                int minimumHeight = (int)Math.Ceiling(uiRoot.RowStyles[0].Height) + footerHeight +
+                    UiSizing.Unit(this, 190) + uiRoot.Padding.Vertical;
+                uiRoot.Height = Math.Max(mainViewport.ClientSize.Height, minimumHeight);
             }
+            finally { updatingUi = false; }
         }
+
 
         private void InitializeTray()
         {

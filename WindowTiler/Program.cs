@@ -19,6 +19,7 @@ namespace MoliWindowTiler
         [STAThread]
         private static void Main()
         {
+            DpiSupport.Enable();
             bool createdNew;
             singleInstanceMutex = new Mutex(true, SingleInstanceMutexName, out createdNew);
             if (!createdNew)

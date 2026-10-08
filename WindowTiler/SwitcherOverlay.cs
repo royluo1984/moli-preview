@@ -8,12 +8,14 @@ namespace MoliWindowTiler
 {
     // A compact, semi-transparent switcher inspired by the quick client
     // selection part of EVE-O Preview. It only activates an existing window.
-    public sealed class SwitcherOverlay : Form
+    public sealed class SwitcherOverlay : AdaptiveForm
     {
         private readonly Action<IntPtr> activate;
         private readonly FlowLayoutPanel buttons = new FlowLayoutPanel();
         private readonly Label caption = new Label();
         private readonly Button closeButton = new Button();
+        private readonly TableLayoutPanel header = new TableLayoutPanel();
+        private Rectangle screenArea;
         private Button pressedButton;
         private Point pressedPoint;
         private bool dragging;
@@ -29,22 +31,30 @@ namespace MoliWindowTiler
             ShowInTaskbar = false;
             TopMost = true;
             StartPosition = FormStartPosition.Manual;
-            AutoScaleMode = AutoScaleMode.Font;
             BackColor = Color.FromArgb(32, 36, 44);
             ForeColor = Color.White;
             Opacity = 0.86;
             Padding = new Padding(6);
-            Width = 390;
-            Height = 92;
+            SetInitialSize(new Size(400, 110));
+            screenArea = Screen.PrimaryScreen.WorkingArea;
+            TableLayoutPanel root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = Padding.Empty };
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            Controls.Add(root);
+            header.Dock = DockStyle.Fill; header.AutoSize = true; header.ColumnCount = 2; header.RowCount = 1;
+            header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            header.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.Controls.Add(header, 0, 0);
 
             caption.Text = "  点击切换；拖动交换位置";
             caption.ForeColor = Color.White;
             caption.Font = new Font(Font, FontStyle.Bold);
-            caption.AutoSize = false;
+            caption.AutoSize = true;
+            caption.Dock = DockStyle.Fill;
             caption.TextAlign = ContentAlignment.MiddleLeft;
-            caption.Location = new Point(6, 4);
-            caption.Size = new Size(240, 24);
-            Controls.Add(caption);
+            header.Controls.Add(caption, 0, 0);
 
             closeButton.Text = "×";
             closeButton.FlatStyle = FlatStyle.Flat;
@@ -52,21 +62,19 @@ namespace MoliWindowTiler
             closeButton.BackColor = Color.FromArgb(75, 80, 92);
             closeButton.ForeColor = Color.White;
             closeButton.Font = new Font(Font, FontStyle.Bold);
-            closeButton.Size = new Size(28, 24);
-            closeButton.Location = new Point(Width - 34, 4);
-            closeButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            closeButton.AutoSize = true;
+            closeButton.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            closeButton.Padding = new Padding(5, 1, 5, 1);
             closeButton.Click += delegate { HideByUser(); };
-            Controls.Add(closeButton);
+            header.Controls.Add(closeButton, 1, 0);
 
             buttons.FlowDirection = FlowDirection.LeftToRight;
             buttons.WrapContents = true;
             buttons.AutoScroll = true;
-            buttons.Location = new Point(6, 32);
-            buttons.Size = new Size(Width - 12, Height - 38);
-            buttons.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            buttons.Dock = DockStyle.Fill;
             buttons.Padding = new Padding(0);
             buttons.AllowDrop = true;
-            Controls.Add(buttons);
+            root.Controls.Add(buttons, 0, 1);
         }
 
         protected override bool ShowWithoutActivation { get { return true; } }
@@ -88,15 +96,12 @@ namespace MoliWindowTiler
             {
                 foreach (Control control in buttons.Controls.Cast<Control>().ToList()) control.Dispose();
                 buttons.Controls.Clear();
-                int count = games == null ? 0 : games.Count;
-                int buttonWidth = count <= 3 ? 118 : 112;
                 foreach (GameWindow game in (games ?? new List<GameWindow>()).Where(g => g != null && Native.IsWindow(g.Handle)))
                 {
                     Button button = new Button();
                     button.Text = ShortName(game.CharacterName);
                     button.Tag = game.Handle;
-                    button.Width = buttonWidth;
-                    button.Height = 30;
+                    button.AutoEllipsis = true;
                     button.Margin = new Padding(2);
                     button.FlatStyle = FlatStyle.Flat;
                     button.FlatAppearance.BorderColor = Color.FromArgb(110, 155, 220);
@@ -128,8 +133,8 @@ namespace MoliWindowTiler
                     buttons.Controls.Add(button);
                 }
                 caption.Text = "  点击切换；拖动交换位置（" + buttons.Controls.Count + " 个）";
-                Height = buttons.Controls.Count <= 3 ? 72 : 108;
-                buttons.Height = Height - 38;
+                RefreshControlMetrics();
+                UpdateOverlayLayout();
             }
             finally { buttons.ResumeLayout(true); }
         }
@@ -137,11 +142,34 @@ namespace MoliWindowTiler
         public void ShowOnScreen(Screen screen)
         {
             if (screen == null) screen = Screen.PrimaryScreen;
-            Rectangle area = screen.WorkingArea;
-            Left = Math.Max(area.Left, area.Right - Width - 12);
-            Top = area.Top + 12;
+            PreferredScreen = screen;
+            screenArea = screen.WorkingArea;
             if (!Visible) Show();
             else BringToFront();
+            UpdateOverlayLayout();
+            Left = Math.Max(screenArea.Left, screenArea.Right - Width - UiSizing.Unit(this, 12));
+            Top = screenArea.Top + UiSizing.Unit(this, 12);
+        }
+
+        protected override void OnUiScaleChanged()
+        {
+            base.OnUiScaleChanged();
+            if (!UiWorkingArea.IsEmpty) screenArea = UiWorkingArea;
+            UpdateOverlayLayout();
+        }
+
+        private void UpdateOverlayLayout()
+        {
+            int width = Math.Min(UiSizing.Unit(this, 400), (int)(screenArea.Width * 0.8));
+            int available = Math.Max(1, width - Padding.Horizontal - UiSizing.Unit(this, 16));
+            int columns = Math.Max(1, Math.Min(3, available / Math.Max(1, UiSizing.Unit(this, 105))));
+            int buttonHeight = Math.Max(UiSizing.Unit(this, 32), Font.Height + UiSizing.Unit(this, 12));
+            foreach (Control button in buttons.Controls)
+                button.Size = new Size(Math.Max(1, available / columns - button.Margin.Horizontal), buttonHeight);
+            int rows = Math.Max(1, (buttons.Controls.Count + columns - 1) / columns);
+            int heading = header.GetPreferredSize(new Size(Math.Max(1, width - Padding.Horizontal), 0)).Height;
+            int height = heading + rows * (buttonHeight + UiSizing.Unit(this, 4)) + Padding.Vertical + UiSizing.Unit(this, 12);
+            Size = new Size(width, Math.Min(height, (int)(screenArea.Height * 0.8)));
         }
 
         public void HideByUser()

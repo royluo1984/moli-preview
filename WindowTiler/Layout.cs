@@ -26,6 +26,7 @@ namespace MoliWindowTiler
         public int[] RowCounts;
         public LayoutAlignment Alignment;
         public int Gap;
+        public bool Stacked;
         public double WorstHidden;
         public double HiddenRatio;
         public long ClippedArea;
@@ -35,6 +36,7 @@ namespace MoliWindowTiler
         {
             get
             {
+                if (Stacked) return "全部重叠";
                 string grid = string.Join(" + ", RowCounts.Select(x => x.ToString()).ToArray());
                 return RowCounts.Length + " 行（每行 " + grid + " 个）";
             }
@@ -106,6 +108,29 @@ namespace MoliWindowTiler
             int[] rows = rowCounts.ToArray();
             ValidateRows(sizes, rows);
             return Build(area, sizes, rows, alignment, gap);
+        }
+
+        // Align each original frame to the same anchor. Different-sized clients
+        // share a center/edge instead of being resized to one common rectangle.
+        public static LayoutPlan CalculateStacked(Rectangle area, IList<Size> sizes, LayoutAlignment alignment)
+        {
+            ValidateInput(area, sizes);
+            ValidateAlignment(alignment);
+            Rectangle[] rects = new Rectangle[sizes.Count];
+            for (int i = 0; i < sizes.Count; i++)
+            {
+                Size size = sizes[i];
+                int x = Positions(area.Left, area.Width, new[] { size.Width }, HorizontalAlignment(alignment), 0)[0];
+                int y = Positions(area.Top, area.Height, new[] { size.Height }, VerticalAlignment(alignment), 0)[0];
+                rects[i] = new Rectangle(x, y, size.Width, size.Height);
+            }
+            LayoutPlan plan = new LayoutPlan
+            {
+                Area = area, Windows = rects, RowCounts = new int[0],
+                Alignment = alignment, Gap = 0, Stacked = true
+            };
+            MeasureVisibility(plan);
+            return plan;
         }
 
         private static void ValidateInput(Rectangle area, IList<Size> sizes)
@@ -277,11 +302,22 @@ namespace MoliWindowTiler
                 Area = area, Windows = rects, RowCounts = rows,
                 Alignment = alignment, Gap = gap
             };
+            MeasureVisibility(plan);
+            double naturalHeight = heights.Sum() + (double)gap * Math.Max(0, rows.Length - 1);
+            double ratio = naturalWidth / naturalHeight;
+            plan.ShapePenalty = Math.Abs(Math.Log(ratio / ((double)area.Width / area.Height)))
+                + (rows.Max() - rows.Min()) * 0.08;
+            return plan;
+        }
+
+        private static void MeasureVisibility(LayoutPlan plan)
+        {
+            Rectangle[] rects = plan.Windows;
             long totalArea = 0, hiddenArea = 0;
             for (int i = 0; i < rects.Length; i++)
             {
                 long full = Surface(rects[i]);
-                Rectangle visible = Rectangle.Intersect(rects[i], area);
+                Rectangle visible = Rectangle.Intersect(rects[i], plan.Area);
                 long clipped = full - Surface(visible);
                 List<Rectangle> covers = new List<Rectangle>();
                 for (int j = i + 1; j < rects.Length; j++)
@@ -296,11 +332,6 @@ namespace MoliWindowTiler
                 hiddenArea += hidden;
             }
             plan.HiddenRatio = (double)hiddenArea / totalArea;
-            double naturalHeight = heights.Sum() + (double)gap * Math.Max(0, rows.Length - 1);
-            double ratio = naturalWidth / naturalHeight;
-            plan.ShapePenalty = Math.Abs(Math.Log(ratio / ((double)area.Width / area.Height)))
-                + (rows.Max() - rows.Min()) * 0.08;
-            return plan;
         }
 
         private static bool Better(LayoutPlan a, LayoutPlan b)

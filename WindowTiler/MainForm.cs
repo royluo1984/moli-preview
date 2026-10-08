@@ -106,13 +106,15 @@ namespace MoliWindowTiler
                         left + (r.Left - area.Left) * scale,
                         top + (r.Top - area.Top) * scale,
                         Math.Max(2, r.Width * scale), Math.Max(2, r.Height * scale));
-                    using (Brush fill = new SolidBrush(Color.FromArgb(185, colors[i % colors.Length])))
+                    using (Brush fill = new SolidBrush(Color.FromArgb(plan.Stacked ? 255 : 185, colors[i % colors.Length])))
                     using (Pen border = new Pen(colors[i % colors.Length], Math.Max(1, UiSizing.Unit(this, 1))))
                     {
                         g.FillRectangle(fill, draw);
                         g.DrawRectangle(border, draw.X, draw.Y, draw.Width, draw.Height);
                     }
-                    string label = (i + 1) + "  " + (i < windows.Count ? ShortTitle(windows[i].Title) : "游戏窗口");
+                    if (plan.Stacked && i < plan.Windows.Length - 1) continue;
+                    string label = plan.Stacked ? "重叠显示 " + windows.Count + " 个客户端"
+                        : (i + 1) + "  " + (i < windows.Count ? ShortTitle(windows[i].Title) : "游戏窗口");
                     using (Brush labelBrush = new SolidBrush(Color.White))
                     {
                         float inset = UiSizing.Unit(this, 4);
@@ -134,6 +136,7 @@ namespace MoliWindowTiler
 
     public sealed class MainForm : AdaptiveForm
     {
+        private const int StackedLayoutIndex = 6;
         private readonly ListView windowList = new ListView();
         private readonly ComboBox monitorBox = new ComboBox();
         private readonly ComboBox columnsBox = new ComboBox();
@@ -267,11 +270,12 @@ namespace MoliWindowTiler
             monitorBox.SelectedIndexChanged += delegate { SaveSettings(); UpdatePlan(); };
             settings.Controls.Add(SettingField("目标屏幕", monitorBox));
             ConfigureCombo(columnsBox);
-            columnsBox.Items.AddRange(new object[] { "智能排列", "一行横排", "一列竖排", "两行均匀", "三行均匀", "自定义组合" });
+            columnsBox.Items.AddRange(new object[] { "智能排列", "一行横排", "一列竖排", "两行均匀", "三行均匀", "自定义组合", "全部重叠" });
             columnsBox.SelectedIndex = 0;
             columnsBox.SelectedIndexChanged += delegate
             {
                 customRowsBox.Enabled = columnsBox.SelectedIndex == 5;
+                gapBox.Enabled = columnsBox.SelectedIndex != StackedLayoutIndex;
                 SaveSettings(); UpdatePlan();
             };
             settings.Controls.Add(SettingField("排列方式", columnsBox));
@@ -733,6 +737,7 @@ namespace MoliWindowTiler
                 ApplyMinimizeAllHotkey(settings.MinimizeAllModifiers, settings.MinimizeAllKey);
                 preferredMonitor = settings.Monitor ?? "";
                 customRowsBox.Enabled = columnsBox.SelectedIndex == 5;
+                gapBox.Enabled = columnsBox.SelectedIndex != StackedLayoutIndex;
             }
             finally
             {
@@ -1131,17 +1136,23 @@ namespace MoliWindowTiler
 
         private LayoutChoice ChoosePlan(List<GameWindow> selected, Rectangle area)
         {
-            int[] requestedRows = RequestedRows(selected.Count);
             LayoutAlignment alignment = SelectedAlignment();
             int gap = SelectedGap();
             // The game owns the client-area resolution. Calculate with each live outer
             // rectangle and let ArrangeWindows move the frames without resizing them.
             List<Size> outer = selected.Select(g => g.Bounds.Size).ToList();
-            LayoutPlan keep = requestedRows == null
-                ? global::MoliWindowTiler.LayoutEngine.Calculate(area, outer, 0, alignment, gap)
-                : global::MoliWindowTiler.LayoutEngine.Calculate(area, outer, requestedRows, alignment, gap);
+            LayoutPlan keep;
+            if (columnsBox.SelectedIndex == StackedLayoutIndex)
+                keep = global::MoliWindowTiler.LayoutEngine.CalculateStacked(area, outer, alignment);
+            else
+            {
+                int[] requestedRows = RequestedRows(selected.Count);
+                keep = requestedRows == null
+                    ? global::MoliWindowTiler.LayoutEngine.Calculate(area, outer, 0, alignment, gap)
+                    : global::MoliWindowTiler.LayoutEngine.Calculate(area, outer, requestedRows, alignment, gap);
+            }
             return new LayoutChoice { Plan = keep, ClientSize = selected[0].ClientSize,
-                Fits = keep.ClippedArea == 0 && keep.HiddenRatio < 0.00001 };
+                Fits = keep.ClippedArea == 0 && (keep.Stacked || keep.HiddenRatio < 0.00001) };
         }
 
         private void UpdateSwitcher()
@@ -1587,9 +1598,15 @@ namespace MoliWindowTiler
                 preview.SetPlan(choice.Plan, selected, area, choice.ClientSize);
                 string result = "已选 " + selected.Count + " 个，" + choice.Plan.Description
                     + "，对齐 " + AlignmentText(choice.Plan.Alignment)
-                    + "，间距 " + choice.Plan.Gap + "，当前客户端 "
+                    + (choice.Plan.Stacked ? "，窗口间距不适用" : "，间距 " + choice.Plan.Gap) + "，当前客户端 "
                     + choice.ClientSize.Width + "×" + choice.ClientSize.Height;
-                if (choice.Plan.ClippedArea > 0 || choice.Plan.HiddenRatio > 0.00001)
+                if (choice.Plan.Stacked)
+                {
+                    result += choice.Plan.ClippedArea > 0
+                        ? "；部分窗口大于可用区域，按原始尺寸叠放"
+                        : "；所有窗口按原始尺寸叠放";
+                }
+                else if (choice.Plan.ClippedArea > 0 || choice.Plan.HiddenRatio > 0.00001)
                     result += "；当前屏幕不足，预计重叠/超出 " + (choice.Plan.HiddenRatio * 100).ToString("0.#") + "%";
                 else result += "；无重叠";
                 planLabel.Text = result;
@@ -1705,11 +1722,11 @@ namespace MoliWindowTiler
             List<Size> actualSizes = selected.Select(g => Native.WindowBounds(g.Handle).Size).ToList();
             if (actualSizes.Any(s => s.Width <= 0 || s.Height <= 0))
                 actualSizes = selected.Select(g => g.Bounds.Size).ToList();
-            // Keep the row grouping shown in the preview so a visible 3+3 layout
-            // remains 3+3 after the client reports its live outer size.
-            LayoutPlan finalPlan = global::MoliWindowTiler.LayoutEngine.Calculate(
-                currentArea, actualSizes, currentPlan.RowCounts,
-                currentPlan.Alignment, currentPlan.Gap);
+            // Keep the chosen layout after re-reading live sizes, including stacking.
+            LayoutPlan finalPlan = currentPlan.Stacked
+                ? global::MoliWindowTiler.LayoutEngine.CalculateStacked(currentArea, actualSizes, currentPlan.Alignment)
+                : global::MoliWindowTiler.LayoutEngine.Calculate(currentArea, actualSizes, currentPlan.RowCounts,
+                    currentPlan.Alignment, currentPlan.Gap);
             for (int i = 0; i < selected.Count && i < finalPlan.Windows.Length; i++)
             {
                 Rectangle target = finalPlan.Windows[i];
